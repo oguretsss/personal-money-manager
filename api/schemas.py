@@ -17,10 +17,29 @@ class SummaryItem(BaseModel):
     type: str
     total: float
 
+class SpaceBalanceItem(BaseModel):
+    space: str
+    balance: float
+
 class SummaryResponse(BaseModel):
     start: datetime
     end: datetime
     income_total: float
     expense_total: float
-    balance: float
+
+    cash_balance: float
+    spaces_total: float
+    total_assets: float
+
+    spaces: list[SpaceBalanceItem]
     by_category: list[SummaryItem]
+
+class SpaceCreate(BaseModel):
+    name: str = Field(min_length=1)
+
+class SpaceTransferCreate(BaseModel):
+    space_name: str
+    direction: str  # "to_space" | "from_space"
+    amount: float = Field(gt=0)
+    happened_at: datetime | None = None
+    note: str = ""

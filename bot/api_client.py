@@ -27,3 +27,18 @@ class ApiClient:
         )
         r.raise_for_status()
         return r.json()
+    
+    async def top_spaces(self, telegram_id: int) -> list[str]:
+        r = await self._client.get("/spaces/top", params={"telegram_id": telegram_id})
+        r.raise_for_status()
+        return r.json()
+
+    async def list_spaces(self, telegram_id: int) -> list[dict]:
+        r = await self._client.get("/spaces", params={"telegram_id": telegram_id})
+        r.raise_for_status()
+        return r.json()
+
+    async def space_transfer(self, telegram_id: int, payload: dict) -> dict:
+        r = await self._client.post("/spaces/transfer", params={"telegram_id": telegram_id}, json=payload)
+        r.raise_for_status()
+        return r.json()

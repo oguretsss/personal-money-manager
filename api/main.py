@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 import os
 
 from db import init_db, get_session
-from models import User, Category, Transaction
-from schemas import TransactionCreate, SummaryResponse, SummaryItem
+from models import User, Category, Transaction,Space, SpaceTransfer
+from schemas import TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem, SpaceTransferCreate
 from auth import require_admin
 
 app = FastAPI(title="Family Budget API")
@@ -129,13 +129,49 @@ def summary(telegram_id: int, start: datetime | None = None, end: datetime | Non
         SummaryItem(category=k[0], type=k[1], total=v / 100.0)
         for k, v in sorted(by_cat_c.items(), key=lambda kv: kv[1], reverse=True)
     ]
+    # transfers in period affect cash, but are not expenses
+    rows = session.exec(
+        select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+        .where(SpaceTransfer.happened_at >= start, SpaceTransfer.happened_at < end)
+        .group_by(SpaceTransfer.direction)
+    ).all()
+
+    to_space_c = sum(int(s or 0) for d, s in rows if d == "to_space")
+    from_space_c = sum(int(s or 0) for d, s in rows if d == "from_space")
+
+    cash_balance_c = (income_total_c - expense_total_c) - to_space_c + from_space_c
+
+    # spaces balances (all-time)
+    spaces = session.exec(select(Space)).all()
+    space_items = []
+    spaces_total_c = 0
+
+    for sp in spaces:
+        r2 = session.exec(
+            select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+            .where(SpaceTransfer.space_id == sp.id)
+            .group_by(SpaceTransfer.direction)
+        ).all()
+
+        to_c = sum(int(s or 0) for d, s in r2 if d == "to_space")
+        from_c = sum(int(s or 0) for d, s in r2 if d == "from_space")
+        bal_c = to_c - from_c
+        spaces_total_c += bal_c
+        space_items.append({"space": sp.name, "balance": bal_c / 100.0})
+
+    total_assets_c = cash_balance_c + spaces_total_c
 
     return SummaryResponse(
         start=start,
         end=end,
         income_total=income_total_c / 100.0,
         expense_total=expense_total_c / 100.0,
-        balance=(income_total_c - expense_total_c) / 100.0,
+
+        cash_balance=cash_balance_c / 100.0,
+        spaces_total=spaces_total_c / 100.0,
+        total_assets=total_assets_c / 100.0,
+
+        spaces=[SpaceBalanceItem(**x) for x in space_items],
         by_category=items,
     )
 
@@ -169,3 +205,106 @@ def top_categories(
 
     rows = session.exec(stmt).all()
     return [r[0] for r in rows]
+
+@app.get("/spaces/top")
+def top_spaces(
+    telegram_id: int,
+    session: Session = Depends(get_session),
+):
+    ensure_user_allowed(session, telegram_id)
+
+    since = datetime.utcnow() - timedelta(days=30)
+
+    stmt = (
+        select(
+            Space.name,
+            func.count(SpaceTransfer.id).label("cnt"),
+        )
+        .join(SpaceTransfer, SpaceTransfer.space_id == Space.id)
+        .where(SpaceTransfer.happened_at >= since)
+        .group_by(Space.name)
+        .order_by(func.count(SpaceTransfer.id).desc())
+        .limit(6)
+    )
+
+    rows = session.exec(stmt).all()
+    return [r[0] for r in rows]
+
+def get_or_create_space(session: Session, name: str) -> Space:
+    s = session.exec(select(Space).where(Space.name == name)).first()
+    if s:
+        return s
+    s = Space(name=name)
+    session.add(s)
+    session.commit()
+    session.refresh(s)
+    return s
+
+@app.get("/spaces")
+def list_spaces(telegram_id: int, session: Session = Depends(get_session)):
+    ensure_user_allowed(session, telegram_id)
+
+    spaces = session.exec(select(Space)).all()
+    if not spaces:
+        return []
+
+    # посчитаем баланс каждого space
+    balances = {}
+    for sp in spaces:
+        rows = session.exec(
+            select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+            .where(SpaceTransfer.space_id == sp.id)
+            .group_by(SpaceTransfer.direction)
+        ).all()
+
+        to_c = 0
+        from_c = 0
+        for direction, s in rows:
+            if direction == "to_space":
+                to_c = int(s or 0)
+            elif direction == "from_space":
+                from_c = int(s or 0)
+
+        balances[sp.id] = to_c - from_c
+
+    return [{"id": sp.id, "name": sp.name, "balance": balances.get(sp.id, 0) / 100.0} for sp in spaces]
+
+@app.post("/spaces/transfer")
+def space_transfer(payload: SpaceTransferCreate, telegram_id: int, session: Session = Depends(get_session)):
+    ensure_user_allowed(session, telegram_id)
+
+    direction = payload.direction.strip()
+    if direction not in ("to_space", "from_space"):
+        raise HTTPException(status_code=400, detail="Invalid direction")
+
+    sp = get_or_create_space(session, payload.space_name.strip())
+    amount_cents = int(round(payload.amount * 100))
+    happened_at = payload.happened_at or datetime.utcnow()
+
+    # если выводим из space — проверим, что там хватает
+    if direction == "from_space":
+        rows = session.exec(
+            select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+            .where(SpaceTransfer.space_id == sp.id)
+            .group_by(SpaceTransfer.direction)
+        ).all()
+
+        to_c = sum(int(s or 0) for d, s in rows if d == "to_space")
+        from_c = sum(int(s or 0) for d, s in rows if d == "from_space")
+        balance_c = to_c - from_c
+
+        if amount_cents > balance_c:
+            raise HTTPException(status_code=400, detail="Not enough money in space")
+
+    tr = SpaceTransfer(
+        space_id=sp.id,
+        amount_cents=amount_cents,
+        direction=direction,
+        happened_at=happened_at,
+        note=payload.note or "",
+        created_by_telegram_id=telegram_id,
+    )
+    session.add(tr)
+    session.commit()
+    session.refresh(tr)
+    return {"id": tr.id, "ok": True}

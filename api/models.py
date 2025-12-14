@@ -22,3 +22,17 @@ class Transaction(SQLModel, table=True):
     happened_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     note: str = ""
     created_by_telegram_id: int = Field(index=True)
+
+class Space(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True, unique=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class SpaceTransfer(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    space_id: int = Field(foreign_key="space.id", index=True)
+    amount_cents: int
+    direction: str  # "to_space" | "from_space"
+    happened_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    note: str = ""
+    created_by_telegram_id: int = Field(index=True)
