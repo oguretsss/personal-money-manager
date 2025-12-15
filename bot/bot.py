@@ -1,4 +1,5 @@
 import os
+import re
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -17,6 +18,26 @@ bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 api = ApiClient()
 
+def try_parse_amount(text: str) -> float | None:
+    if not text:
+        return None
+
+    s = text.strip()
+
+    # Разрешим: "12", "12.5", "12,5", "1 234,56"
+    s = s.replace(" ", "").replace("\u00A0", "")  # обычный и non-breaking space
+    s = s.replace(",", ".")
+
+    # Только число (без лишних символов)
+    if not re.fullmatch(r"\d+(\.\d+)?", s):
+        return None
+
+    try:
+        value = float(s)
+        return value if value > 0 else None
+    except Exception:
+        return None
+
 MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➖ Expense"), KeyboardButton(text="➕ Income")],
@@ -33,6 +54,14 @@ SPACES_KB = ReplyKeyboardMarkup(
     ],
     resize_keyboard=True,
 )
+
+NOTE_KB = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="⏭ Skip note")],
+    ],
+    resize_keyboard=True,
+)
+
 
 @dp.message(F.text.in_({"/start", "/menu"}))
 async def start(message: Message, state: FSMContext):
@@ -78,7 +107,7 @@ async def summary(message: Message):
         lines.append("🏦 *Spaces*")
         for sp in sorted(
             data["spaces"], key=lambda x: x["balance"], reverse=True
-        )[:6]:
+        ):
             lines.append(f"• {sp['space']}: `{sp['balance']:.2f}`")
 
     await message.answer(
@@ -162,15 +191,19 @@ async def enter_category(message: Message, state: FSMContext):
     # категория выбрана кнопкой или введена вручную
     await state.update_data(category_name=text)
     await state.set_state(AddTx.entering_note)
-    await message.answer("Optional note (or '-' to skip):", reply_markup=MAIN_KB)
+    await message.answer("Add a note (optional):", reply_markup=NOTE_KB)
+
 
 
 
 @dp.message(AddTx.entering_note)
 async def enter_note(message: Message, state: FSMContext):
-    note = (message.text or "").strip()
-    if note == "-":
+    text = (message.text or "").strip()
+
+    if text == "⏭ Skip note":
         note = ""
+    else:
+        note = text
 
     data = await state.get_data()
     payload = {
@@ -183,11 +216,12 @@ async def enter_note(message: Message, state: FSMContext):
     try:
         res = await api.create_transaction(message.from_user.id, payload)
     except Exception:
-        await message.answer("Failed to add transaction. Are you in the allowed users list?")
+        await message.answer("Failed to add transaction.")
         return
 
     await state.clear()
-    await message.answer(f"Saved ✅ (id={res['id']})", reply_markup=MAIN_KB)
+    await message.answer("Saved ✅", reply_markup=MAIN_KB)
+
 
 @dp.message(F.text == "🏦 Spaces")
 async def spaces_menu(message: Message, state: FSMContext):
@@ -266,14 +300,18 @@ async def space_choose_space(message: Message, state: FSMContext):
 
     await state.update_data(space_name=text)
     await state.set_state(SpaceTx.entering_note)
-    await message.answer("Optional note (or '-' to skip):", reply_markup=SPACES_KB)
+    await message.answer("Add a note (optional):", reply_markup=NOTE_KB)
+
 
 
 @dp.message(SpaceTx.entering_note)
 async def space_enter_note(message: Message, state: FSMContext):
-    note = (message.text or "").strip()
-    if note == "-":
+    text = (message.text or "").strip()
+
+    if text == "⏭ Skip note":
         note = ""
+    else:
+        note = text
 
     data = await state.get_data()
     payload = {
@@ -285,13 +323,43 @@ async def space_enter_note(message: Message, state: FSMContext):
 
     try:
         res = await api.space_transfer(message.from_user.id, payload)
-    except Exception as e:
-        # если API вернул "Not enough money in space" — бот покажет общую ошибку
-        await message.answer("Failed to transfer. (Maybe not enough money in that space?)")
+    except Exception:
+        await message.answer("Failed to transfer.")
         return
 
     await state.clear()
-    await message.answer(f"Saved ✅ (id={res['id']})", reply_markup=MAIN_KB)
+    await message.answer("Saved ✅", reply_markup=MAIN_KB)
+
+@dp.message()
+async def quick_expense_if_number(message: Message, state: FSMContext):
+    # Срабатывает только когда пользователь не в процессе ввода (нет активного состояния FSM)
+    if await state.get_state() is not None:
+        return
+
+    amount = try_parse_amount(message.text or "")
+    if amount is None:
+        return  # не число — пусть обработают другие хендлеры (или ничего)
+
+    # Быстрый ввод расхода
+    await state.update_data(type="expense", amount=amount)
+    await state.set_state(AddTx.entering_category)
+
+    try:
+        categories = await api.top_categories(message.from_user.id, "expense")
+    except Exception:
+        categories = []
+
+    if categories:
+        await message.answer(
+            f"➖ Expense `{amount:.2f}` — choose category:",
+            reply_markup=categories_keyboard(categories),
+            parse_mode="Markdown",
+        )
+    else:
+        await message.answer(
+            f"➖ Expense `{amount:.2f}` — enter category name:",
+            parse_mode="Markdown",
+        )
 
    
 def main():
