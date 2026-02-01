@@ -135,7 +135,8 @@ async def last_expenses(message: Message):
     lines = ["📜 *Last 10 expenses*", ""]
     for tx in transactions:
         note_part = f" _{tx['note']}_" if tx["note"] else ""
-        lines.append(f"• `{tx['amount']:.2f}` — {tx['category']}{note_part}")
+        date_str = tx["date"][:10]  # Extract YYYY-MM-DD from ISO format
+        lines.append(f"• {date_str}: `{tx['amount']:.2f}` — {tx['category']}{note_part}")
 
     await message.answer(
         "\n".join(lines),
