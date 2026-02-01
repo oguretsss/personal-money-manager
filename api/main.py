@@ -178,32 +178,28 @@ def summary(telegram_id: int, start: datetime | None = None, end: datetime | Non
         by_category=items,
     )
 
-@app.get("/categories/top")
-def top_categories(
+@app.get("/categories")
+def list_categories(
     telegram_id: int,
     type: str,
     session: Session = Depends(get_session),
 ):
+    """Return all categories of a given type, ordered by usage frequency."""
     ensure_user_allowed(session, telegram_id)
 
     if type not in ("income", "expense"):
         raise HTTPException(status_code=400, detail="Invalid type")
 
-    since = datetime.utcnow() - timedelta(days=30)
-
+    # Get all categories of this type, ordered by usage count (most used first)
     stmt = (
         select(
             Category.name,
             func.count(Transaction.id).label("cnt"),
         )
-        .join(Transaction, Transaction.category_id == Category.id)
-        .where(
-            Transaction.type == type,
-            Transaction.happened_at >= since,
-        )
+        .outerjoin(Transaction, Transaction.category_id == Category.id)
+        .where(Category.type == type)
         .group_by(Category.name)
         .order_by(func.count(Transaction.id).desc())
-        .limit(6)
     )
 
     rows = session.exec(stmt).all()

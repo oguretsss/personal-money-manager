@@ -159,7 +159,7 @@ async def enter_amount(message: Message, state: FSMContext):
     tx_type = data["type"]
 
     try:
-        categories = await api.top_categories(message.from_user.id, tx_type)
+        categories = await api.list_categories(message.from_user.id, tx_type)
     except Exception:
         categories = []
 
@@ -345,7 +345,7 @@ async def quick_expense_if_number(message: Message, state: FSMContext):
     await state.set_state(AddTx.entering_category)
 
     try:
-        categories = await api.top_categories(message.from_user.id, "expense")
+        categories = await api.list_categories(message.from_user.id, "expense")
     except Exception:
         categories = []
 

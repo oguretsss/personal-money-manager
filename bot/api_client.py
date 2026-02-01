@@ -17,9 +17,9 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
-    async def top_categories(self, telegram_id: int, tx_type: str) -> list[str]:
+    async def list_categories(self, telegram_id: int, tx_type: str) -> list[str]:
         r = await self._client.get(
-            "/categories/top",
+            "/categories",
             params={
                 "telegram_id": telegram_id,
                 "type": tx_type,
