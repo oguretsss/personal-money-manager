@@ -129,17 +129,20 @@ def summary(telegram_id: int, start: datetime | None = None, end: datetime | Non
         SummaryItem(category=k[0], type=k[1], total=v / 100.0)
         for k, v in sorted(by_cat_c.items(), key=lambda kv: kv[1], reverse=True)
     ]
-    # transfers in period affect cash, but are not expenses
-    rows = session.exec(
+
+    # Cash balance is all-time (not period-specific)
+    all_txs = session.exec(select(Transaction)).all()
+    all_income_c = sum(tx.amount_cents for tx in all_txs if tx.type == "income")
+    all_expense_c = sum(tx.amount_cents for tx in all_txs if tx.type == "expense")
+
+    all_transfers = session.exec(
         select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
-        .where(SpaceTransfer.happened_at >= start, SpaceTransfer.happened_at < end)
         .group_by(SpaceTransfer.direction)
     ).all()
+    all_to_space_c = sum(int(s or 0) for d, s in all_transfers if d == "to_space")
+    all_from_space_c = sum(int(s or 0) for d, s in all_transfers if d == "from_space")
 
-    to_space_c = sum(int(s or 0) for d, s in rows if d == "to_space")
-    from_space_c = sum(int(s or 0) for d, s in rows if d == "from_space")
-
-    cash_balance_c = (income_total_c - expense_total_c) - to_space_c + from_space_c
+    cash_balance_c = (all_income_c - all_expense_c) - all_to_space_c + all_from_space_c
 
     # spaces balances (all-time)
     spaces = session.exec(select(Space)).all()
