@@ -17,6 +17,14 @@ class ApiClient:
         r.raise_for_status()
         return r.json()
 
+    async def recent_transactions(self, telegram_id: int, tx_type: str = "expense", limit: int = 10) -> list[dict]:
+        r = await self._client.get(
+            "/transactions/recent",
+            params={"telegram_id": telegram_id, "type": tx_type, "limit": limit},
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def list_categories(self, telegram_id: int, tx_type: str) -> list[str]:
         r = await self._client.get(
             "/categories",

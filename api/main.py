@@ -178,6 +178,39 @@ def summary(telegram_id: int, start: datetime | None = None, end: datetime | Non
         by_category=items,
     )
 
+@app.get("/transactions/recent")
+def recent_transactions(
+    telegram_id: int,
+    type: str = "expense",
+    limit: int = 10,
+    session: Session = Depends(get_session),
+):
+    """Return recent transactions of a given type with amount, category, and note."""
+    ensure_user_allowed(session, telegram_id)
+
+    if type not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="Invalid type")
+
+    stmt = (
+        select(Transaction, Category.name)
+        .join(Category, Transaction.category_id == Category.id)
+        .where(Transaction.type == type)
+        .order_by(Transaction.happened_at.desc())
+        .limit(limit)
+    )
+
+    rows = session.exec(stmt).all()
+    return [
+        {
+            "amount": tx.amount_cents / 100.0,
+            "category": cat_name,
+            "note": tx.note or "",
+            "date": tx.happened_at.isoformat(),
+        }
+        for tx, cat_name in rows
+    ]
+
+
 @app.get("/categories")
 def list_categories(
     telegram_id: int,

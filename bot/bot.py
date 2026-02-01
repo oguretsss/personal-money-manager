@@ -42,6 +42,7 @@ MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➖ Expense"), KeyboardButton(text="➕ Income")],
         [KeyboardButton(text="🏦 Spaces"), KeyboardButton(text="📊 Summary")],
+        [KeyboardButton(text="📜 Last 10 expenses")],
     ],
     resize_keyboard=True,
 )
@@ -117,6 +118,30 @@ async def summary(message: Message):
     )
 
 
+@dp.message(F.text == "📜 Last 10 expenses")
+async def last_expenses(message: Message):
+    try:
+        transactions = await api.recent_transactions(message.from_user.id, "expense", 10)
+    except Exception:
+        await message.answer(
+            "⚠️ I can't get the transactions.\nAre you in the allowed users list?"
+        )
+        return
+
+    if not transactions:
+        await message.answer("No expenses yet.", reply_markup=MAIN_KB)
+        return
+
+    lines = ["📜 *Last 10 expenses*", ""]
+    for tx in transactions:
+        note_part = f" _{tx['note']}_" if tx["note"] else ""
+        lines.append(f"• `{tx['amount']:.2f}` — {tx['category']}{note_part}")
+
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=MAIN_KB,
+        parse_mode="Markdown",
+    )
 
 
 @dp.message(F.text.in_({"➖ Expense", "➕ Income"}))
