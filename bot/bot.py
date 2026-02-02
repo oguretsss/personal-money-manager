@@ -1,12 +1,19 @@
 import os
 import re
+import asyncio
+import logging
+from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from api_client import ApiClient
 from states import AddTx, SpaceTx
+
+logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
@@ -388,10 +395,78 @@ async def quick_expense_if_number(message: Message, state: FSMContext):
         )
 
    
-def main():
-    import asyncio
-    asyncio.run(dp.start_polling(bot))
+async def send_monthly_reports():
+    """Send monthly report to all active users on the 1st of each month."""
+    logging.info("Starting monthly report generation...")
+
+    # Get previous month
+    now = datetime.utcnow()
+    if now.month == 1:
+        year, month = now.year - 1, 12
+    else:
+        year, month = now.year, now.month - 1
+
+    month_name = datetime(year, month, 1).strftime("%B %Y")
+
+    try:
+        users = await api.get_active_users()
+    except Exception as e:
+        logging.error(f"Failed to get active users: {e}")
+        return
+
+    for telegram_id in users:
+        try:
+            report = await api.monthly_report(telegram_id, year, month)
+
+            lines = [
+                f"📅 *Monthly Report: {month_name}*",
+                "",
+                "💰 *Summary*",
+                f"🟢 Income: `{report['income_total']:.2f}`",
+                f"🔴 Expenses: `{report['expense_total']:.2f}`",
+                f"📊 Balance: `{report['income_total'] - report['expense_total']:.2f}`",
+            ]
+
+            if report["top_expense_categories"]:
+                lines.append("")
+                lines.append("🔝 *Top 5 Expense Categories*")
+                for item in report["top_expense_categories"]:
+                    lines.append(f"• {item['category']}: `{item['total']:.2f}`")
+
+            if report["to_spaces"] > 0 or report["from_spaces"] > 0:
+                lines.append("")
+                lines.append("🏦 *Space Transfers*")
+                if report["to_spaces"] > 0:
+                    lines.append(f"➡️ To spaces: `{report['to_spaces']:.2f}`")
+                if report["from_spaces"] > 0:
+                    lines.append(f"⬅️ From spaces: `{report['from_spaces']:.2f}`")
+
+            await bot.send_message(
+                telegram_id,
+                "\n".join(lines),
+                parse_mode="Markdown",
+            )
+            logging.info(f"Sent monthly report to user {telegram_id}")
+
+        except Exception as e:
+            logging.error(f"Failed to send report to {telegram_id}: {e}")
+
+    logging.info("Monthly report generation completed.")
+
+
+async def main():
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(
+        send_monthly_reports,
+        CronTrigger(day=1, hour=9, minute=0),  # Run on 1st of each month at 9:00 AM UTC
+        id="monthly_report",
+        replace_existing=True,
+    )
+    scheduler.start()
+    logging.info("Scheduler started. Monthly reports will be sent on the 1st of each month at 9:00 AM UTC.")
+
+    await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

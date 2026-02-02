@@ -37,6 +37,79 @@ def get_or_create_category(session: Session, name: str, tx_type: str) -> Categor
 def health():
     return {"ok": True}
 
+
+@app.get("/users/active")
+def list_active_users(session: Session = Depends(get_session)):
+    """Return telegram_ids of all active users."""
+    users = session.exec(select(User).where(User.is_active == True)).all()
+    return [u.telegram_id for u in users]
+
+
+@app.get("/report/monthly")
+def monthly_report(
+    telegram_id: int,
+    year: int,
+    month: int,
+    session: Session = Depends(get_session),
+):
+    """Generate monthly report: income, expenses, top-5 expense categories, space transfers."""
+    ensure_user_allowed(session, telegram_id)
+
+    # Calculate date range for the month
+    start = datetime(year, month, 1)
+    if month == 12:
+        end = datetime(year + 1, 1, 1)
+    else:
+        end = datetime(year, month + 1, 1)
+
+    # Get transactions for the month
+    txs = session.exec(
+        select(Transaction).where(
+            Transaction.happened_at >= start,
+            Transaction.happened_at < end
+        )
+    ).all()
+
+    cats = {c.id: c for c in session.exec(select(Category)).all()}
+
+    income_total_c = 0
+    expense_total_c = 0
+    expense_by_cat: dict[str, int] = {}
+
+    for tx in txs:
+        if tx.type == "income":
+            income_total_c += tx.amount_cents
+        else:
+            expense_total_c += tx.amount_cents
+            cat_name = cats.get(tx.category_id).name if cats.get(tx.category_id) else "Unknown"
+            expense_by_cat[cat_name] = expense_by_cat.get(cat_name, 0) + tx.amount_cents
+
+    # Top 5 expense categories
+    top_expenses = sorted(expense_by_cat.items(), key=lambda x: x[1], reverse=True)[:5]
+
+    # Space transfers for the month
+    transfers = session.exec(
+        select(SpaceTransfer).where(
+            SpaceTransfer.happened_at >= start,
+            SpaceTransfer.happened_at < end
+        )
+    ).all()
+
+    to_spaces_c = sum(t.amount_cents for t in transfers if t.direction == "to_space")
+    from_spaces_c = sum(t.amount_cents for t in transfers if t.direction == "from_space")
+
+    return {
+        "year": year,
+        "month": month,
+        "income_total": income_total_c / 100.0,
+        "expense_total": expense_total_c / 100.0,
+        "top_expense_categories": [
+            {"category": cat, "total": amt / 100.0} for cat, amt in top_expenses
+        ],
+        "to_spaces": to_spaces_c / 100.0,
+        "from_spaces": from_spaces_c / 100.0,
+    }
+
 @app.post("/admin/users", dependencies=[Depends(require_admin)])
 def admin_upsert_user(telegram_id: int, name: str, is_active: bool = True, role: str = "user",
                       session: Session = Depends(get_session)):

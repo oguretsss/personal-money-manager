@@ -50,3 +50,16 @@ class ApiClient:
         r = await self._client.post("/spaces/transfer", params={"telegram_id": telegram_id}, json=payload)
         r.raise_for_status()
         return r.json()
+
+    async def get_active_users(self) -> list[int]:
+        r = await self._client.get("/users/active")
+        r.raise_for_status()
+        return r.json()
+
+    async def monthly_report(self, telegram_id: int, year: int, month: int) -> dict:
+        r = await self._client.get(
+            "/report/monthly",
+            params={"telegram_id": telegram_id, "year": year, "month": month},
+        )
+        r.raise_for_status()
+        return r.json()
