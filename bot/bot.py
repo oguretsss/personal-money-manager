@@ -11,7 +11,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from api_client import ApiClient
-from states import AddTx, SpaceTx
+from states import AddTx, SpaceTx, MonthlyStats
 
 logging.basicConfig(level=logging.INFO)
 
@@ -49,7 +49,7 @@ MAIN_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="➖ Expense"), KeyboardButton(text="➕ Income")],
         [KeyboardButton(text="🏦 Spaces"), KeyboardButton(text="📊 Summary")],
-        [KeyboardButton(text="📜 Last 10 expenses")],
+        [KeyboardButton(text="📜 Last 10 expenses"), KeyboardButton(text="📆 Monthly Stats")],
     ],
     resize_keyboard=True,
 )
@@ -145,6 +145,102 @@ async def last_expenses(message: Message):
         date_str = tx["date"][:10]  # Extract YYYY-MM-DD from ISO format
         lines.append(f"• {date_str}: `{tx['amount']:.2f}` — {tx['category']}{note_part}")
 
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=MAIN_KB,
+        parse_mode="Markdown",
+    )
+
+
+def get_last_6_months() -> list[tuple[int, int, str]]:
+    """Return list of (year, month, display_name) for the last 6 months."""
+    now = datetime.utcnow()
+    months = []
+    for i in range(6):
+        # Go back i months
+        year = now.year
+        month = now.month - i
+        while month <= 0:
+            month += 12
+            year -= 1
+        month_name = datetime(year, month, 1).strftime("%B %Y")
+        months.append((year, month, month_name))
+    return months
+
+
+def months_keyboard() -> ReplyKeyboardMarkup:
+    months = get_last_6_months()
+    buttons = [[KeyboardButton(text=m[2])] for m in months]
+    buttons.append([KeyboardButton(text="⬅️ Cancel")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+@dp.message(F.text == "📆 Monthly Stats")
+async def monthly_stats_menu(message: Message, state: FSMContext):
+    await state.set_state(MonthlyStats.choosing_month)
+    await message.answer(
+        "Choose a month to view stats:",
+        reply_markup=months_keyboard(),
+    )
+
+
+@dp.message(MonthlyStats.choosing_month)
+async def show_monthly_stats(message: Message, state: FSMContext):
+    text = (message.text or "").strip()
+
+    if text == "⬅️ Cancel":
+        await state.clear()
+        await message.answer("Cancelled", reply_markup=MAIN_KB)
+        return
+
+    # Parse month from button text (e.g., "January 2026")
+    months = get_last_6_months()
+    selected = None
+    for year, month, name in months:
+        if name == text:
+            selected = (year, month, name)
+            break
+
+    if not selected:
+        await message.answer("Please choose a month from the list.")
+        return
+
+    year, month, month_name = selected
+
+    try:
+        report = await api.monthly_report(message.from_user.id, year, month)
+    except Exception:
+        await message.answer(
+            "⚠️ I can't get the report.\nAre you in the allowed users list?",
+            reply_markup=MAIN_KB,
+        )
+        await state.clear()
+        return
+
+    lines = [
+        f"📅 *Monthly Report: {month_name}*",
+        "",
+        "💰 *Summary*",
+        f"🟢 Income: `{report['income_total']:.2f}`",
+        f"🔴 Expenses: `{report['expense_total']:.2f}`",
+        f"📊 Balance: `{report['income_total'] - report['expense_total']:.2f}`",
+    ]
+
+    if report["top_expense_categories"]:
+        lines.append("")
+        lines.append("🔝 *Top 5 Expense Categories*")
+        for item in report["top_expense_categories"]:
+            lines.append(f"• {item['category']}: `{item['total']:.2f}`")
+
+    if report["to_spaces"] > 0 or report["from_spaces"] > 0:
+        lines.append("")
+        lines.append("🏦 *Space Transfers*")
+        if report["to_spaces"] > 0:
+            lines.append(f"➡️ To spaces: `{report['to_spaces']:.2f}`")
+        if report["from_spaces"] > 0:
+            lines.append(f"⬅️ From spaces: `{report['from_spaces']:.2f}`")
+
+    await state.clear()
     await message.answer(
         "\n".join(lines),
         reply_markup=MAIN_KB,

@@ -12,3 +12,7 @@ class SpaceTx(StatesGroup):
     entering_amount = State()
     choosing_space = State()
     entering_note = State()
+
+
+class MonthlyStats(StatesGroup):
+    choosing_month = State()
