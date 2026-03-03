@@ -7,7 +7,7 @@ ADMIN_USER = os.getenv("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 WEB_SECRET_KEY = os.getenv("WEB_SECRET_KEY", "change-me-in-production")
 
-COOKIE_NAME = "session"
+COOKIE_NAME = "auth_token"
 MAX_AGE = 86400  # 24 hours
 
 _serializer = URLSafeTimedSerializer(WEB_SECRET_KEY)
