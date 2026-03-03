@@ -43,3 +43,23 @@ class SpaceTransferCreate(BaseModel):
     amount: float = Field(gt=0)
     happened_at: datetime | None = None
     note: str = ""
+
+class TransactionUpdate(BaseModel):
+    amount: float | None = Field(default=None, gt=0)
+    category_name: str | None = None
+    happened_at: datetime | None = None
+    note: str | None = None
+
+class AdminTransactionCreate(BaseModel):
+    type: str
+    amount: float = Field(gt=0)
+    category_name: str
+    created_by_telegram_id: int
+    happened_at: datetime | None = None
+    note: str = ""
+
+class CategoryUpdate(BaseModel):
+    name: str = Field(min_length=1)
+
+class SpaceUpdate(BaseModel):
+    name: str = Field(min_length=1)

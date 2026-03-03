@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% set active = "categories" %}
+{% block title %}Categories - MoneyManage Admin{% endblock %}
+{% block content %}
+<h2>Categories</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Type</th>
+            <th class="text-right">Transactions</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for cat in categories %}
+    <tr>
+        <td>{{ cat.name }}</td>
+        <td>{{ cat.type }}</td>
+        <td class="text-right">{{ cat.usage_count }}</td>
+        <td>
+            <details>
+                <summary>Rename</summary>
+                <form method="post" action="/categories/{{ cat.id }}/rename">
+                    <label>New name <input type="text" name="name" value="{{ cat.name }}" required></label>
+                    <button type="submit">Save</button>
+                </form>
+            </details>
+            <form method="post" action="/categories/{{ cat.id }}/delete" onsubmit="return confirm('Delete category {{ cat.name }}?')">
+                <button type="submit" class="secondary outline">Delete</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    {% if not categories %}
+    <tr><td colspan="4">No categories found.</td></tr>
+    {% endif %}
+    </tbody>
+</table>
+{% endblock %}

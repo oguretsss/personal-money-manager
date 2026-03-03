@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% set active = "spaces" %}
+{% block title %}Spaces - MoneyManage Admin{% endblock %}
+{% block content %}
+<h2>Spaces</h2>
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th class="text-right">Balance</th>
+            <th>Actions</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for sp in spaces %}
+    <tr>
+        <td>{{ sp.name }}</td>
+        <td class="amount">${{ "%.2f"|format(sp.balance) }}</td>
+        <td>
+            <details>
+                <summary>Rename</summary>
+                <form method="post" action="/spaces/{{ sp.id }}/rename">
+                    <label>New name <input type="text" name="name" value="{{ sp.name }}" required></label>
+                    <button type="submit">Save</button>
+                </form>
+            </details>
+            <form method="post" action="/spaces/{{ sp.id }}/delete" onsubmit="return confirm('Delete space {{ sp.name }}?')">
+                <button type="submit" class="secondary outline">Delete</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    {% if not spaces %}
+    <tr><td colspan="3">No spaces found.</td></tr>
+    {% endif %}
+    </tbody>
+</table>
+{% endblock %}

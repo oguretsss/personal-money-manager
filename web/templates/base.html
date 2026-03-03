@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}MoneyManage Admin{% endblock %}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <style>
+        nav ul li a.active { font-weight: bold; text-decoration: underline; }
+        .flash { padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+        .flash.success { background: #d4edda; color: #155724; }
+        .flash.error { background: #f8d7da; color: #721c24; }
+        .flash.info { background: #d1ecf1; color: #0c5460; }
+        table form { display: inline; margin: 0; }
+        table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
+        .amount { font-family: monospace; text-align: right; }
+        .text-right { text-align: right; }
+        .text-green { color: #2e7d32; }
+        .text-red { color: #c62828; }
+        .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .stat-card { padding: 1rem; border: 1px solid #ddd; border-radius: 8px; text-align: center; }
+        .stat-card h3 { margin: 0; font-size: 0.9rem; color: #666; }
+        .stat-card p { margin: 0.5rem 0 0; font-size: 1.5rem; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <nav class="container-fluid">
+        <ul>
+            <li><strong>MoneyManage</strong></li>
+        </ul>
+        <ul>
+            <li><a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+            <li><a href="/transactions" class="{% if active == 'transactions' %}active{% endif %}">Transactions</a></li>
+            <li><a href="/categories" class="{% if active == 'categories' %}active{% endif %}">Categories</a></li>
+            <li><a href="/spaces" class="{% if active == 'spaces' %}active{% endif %}">Spaces</a></li>
+            <li><a href="/logout">Logout</a></li>
+        </ul>
+    </nav>
+    <main class="container">
+        {% for msg in messages|default([]) %}
+        <div class="flash {{ msg.category }}">{{ msg.message }}</div>
+        {% endfor %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

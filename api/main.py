@@ -5,7 +5,11 @@ import os
 
 from db import init_db, get_session
 from models import User, Category, Transaction,Space, SpaceTransfer
-from schemas import TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem, SpaceTransferCreate
+from schemas import (
+    TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem,
+    SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
+    CategoryUpdate, SpaceUpdate,
+)
 from auth import require_admin
 
 app = FastAPI(title="Family Budget API")
@@ -413,3 +417,278 @@ def space_transfer(payload: SpaceTransferCreate, telegram_id: int, session: Sess
     session.commit()
     session.refresh(tr)
     return {"id": tr.id, "ok": True}
+
+
+# ── Admin CRUD endpoints ──────────────────────────────────────────────
+
+@app.get("/admin/transactions", dependencies=[Depends(require_admin)])
+def admin_list_transactions(
+    type: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    page: int = 1,
+    per_page: int = 50,
+    session: Session = Depends(get_session),
+):
+    stmt = select(Transaction, Category.name).join(Category, Transaction.category_id == Category.id)
+    if type:
+        stmt = stmt.where(Transaction.type == type)
+    if start:
+        stmt = stmt.where(Transaction.happened_at >= start)
+    if end:
+        stmt = stmt.where(Transaction.happened_at < end)
+
+    count_stmt = select(func.count()).select_from(Transaction)
+    if type:
+        count_stmt = count_stmt.where(Transaction.type == type)
+    if start:
+        count_stmt = count_stmt.where(Transaction.happened_at >= start)
+    if end:
+        count_stmt = count_stmt.where(Transaction.happened_at < end)
+    total = session.exec(count_stmt).one()
+
+    stmt = stmt.order_by(Transaction.happened_at.desc()).offset((page - 1) * per_page).limit(per_page)
+    rows = session.exec(stmt).all()
+
+    return {
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "items": [
+            {
+                "id": tx.id,
+                "type": tx.type,
+                "amount": tx.amount_cents / 100.0,
+                "category": cat_name,
+                "category_id": tx.category_id,
+                "happened_at": tx.happened_at.isoformat(),
+                "note": tx.note,
+                "created_by_telegram_id": tx.created_by_telegram_id,
+            }
+            for tx, cat_name in rows
+        ],
+    }
+
+
+@app.post("/admin/transactions", dependencies=[Depends(require_admin)])
+def admin_create_transaction(payload: AdminTransactionCreate, session: Session = Depends(get_session)):
+    tx_type = payload.type.strip().lower()
+    if tx_type not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="Invalid type")
+
+    cat = get_or_create_category(session, payload.category_name.strip(), tx_type)
+    happened_at = payload.happened_at or datetime.utcnow()
+    amount_cents = int(round(payload.amount * 100))
+
+    tx = Transaction(
+        type=tx_type,
+        amount_cents=amount_cents,
+        category_id=cat.id,
+        happened_at=happened_at,
+        note=payload.note or "",
+        created_by_telegram_id=payload.created_by_telegram_id,
+    )
+    session.add(tx)
+    session.commit()
+    session.refresh(tx)
+    return {"id": tx.id, "ok": True}
+
+
+@app.put("/admin/transactions/{tx_id}", dependencies=[Depends(require_admin)])
+def admin_update_transaction(tx_id: int, payload: TransactionUpdate, session: Session = Depends(get_session)):
+    tx = session.get(Transaction, tx_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if payload.amount is not None:
+        tx.amount_cents = int(round(payload.amount * 100))
+    if payload.category_name is not None:
+        cat = get_or_create_category(session, payload.category_name.strip(), tx.type)
+        tx.category_id = cat.id
+    if payload.happened_at is not None:
+        tx.happened_at = payload.happened_at
+    if payload.note is not None:
+        tx.note = payload.note
+
+    session.add(tx)
+    session.commit()
+    return {"ok": True}
+
+
+@app.delete("/admin/transactions/{tx_id}", dependencies=[Depends(require_admin)])
+def admin_delete_transaction(tx_id: int, session: Session = Depends(get_session)):
+    tx = session.get(Transaction, tx_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Not found")
+    session.delete(tx)
+    session.commit()
+    return {"ok": True}
+
+
+@app.get("/admin/categories", dependencies=[Depends(require_admin)])
+def admin_list_categories(session: Session = Depends(get_session)):
+    stmt = (
+        select(Category, func.count(Transaction.id).label("cnt"))
+        .outerjoin(Transaction, Transaction.category_id == Category.id)
+        .group_by(Category.id)
+        .order_by(Category.type, Category.name)
+    )
+    rows = session.exec(stmt).all()
+    return [
+        {"id": cat.id, "name": cat.name, "type": cat.type, "usage_count": cnt}
+        for cat, cnt in rows
+    ]
+
+
+@app.put("/admin/categories/{cat_id}", dependencies=[Depends(require_admin)])
+def admin_update_category(cat_id: int, payload: CategoryUpdate, session: Session = Depends(get_session)):
+    cat = session.get(Category, cat_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Not found")
+    existing = session.exec(select(Category).where(Category.name == payload.name, Category.id != cat_id)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Category with this name already exists")
+    cat.name = payload.name
+    session.add(cat)
+    session.commit()
+    return {"ok": True}
+
+
+@app.delete("/admin/categories/{cat_id}", dependencies=[Depends(require_admin)])
+def admin_delete_category(cat_id: int, session: Session = Depends(get_session)):
+    cat = session.get(Category, cat_id)
+    if not cat:
+        raise HTTPException(status_code=404, detail="Not found")
+    tx_count = session.exec(select(func.count()).select_from(Transaction).where(Transaction.category_id == cat_id)).one()
+    if tx_count > 0:
+        raise HTTPException(status_code=400, detail=f"Cannot delete: {tx_count} transactions use this category")
+    session.delete(cat)
+    session.commit()
+    return {"ok": True}
+
+
+@app.get("/admin/spaces", dependencies=[Depends(require_admin)])
+def admin_list_spaces(session: Session = Depends(get_session)):
+    spaces = session.exec(select(Space)).all()
+    result = []
+    for sp in spaces:
+        rows = session.exec(
+            select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+            .where(SpaceTransfer.space_id == sp.id)
+            .group_by(SpaceTransfer.direction)
+        ).all()
+        to_c = sum(int(s or 0) for d, s in rows if d == "to_space")
+        from_c = sum(int(s or 0) for d, s in rows if d == "from_space")
+        result.append({"id": sp.id, "name": sp.name, "balance": (to_c - from_c) / 100.0})
+    return result
+
+
+@app.put("/admin/spaces/{space_id}", dependencies=[Depends(require_admin)])
+def admin_update_space(space_id: int, payload: SpaceUpdate, session: Session = Depends(get_session)):
+    sp = session.get(Space, space_id)
+    if not sp:
+        raise HTTPException(status_code=404, detail="Not found")
+    existing = session.exec(select(Space).where(Space.name == payload.name, Space.id != space_id)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Space with this name already exists")
+    sp.name = payload.name
+    session.add(sp)
+    session.commit()
+    return {"ok": True}
+
+
+@app.delete("/admin/spaces/{space_id}", dependencies=[Depends(require_admin)])
+def admin_delete_space(space_id: int, session: Session = Depends(get_session)):
+    sp = session.get(Space, space_id)
+    if not sp:
+        raise HTTPException(status_code=404, detail="Not found")
+    tr_count = session.exec(select(func.count()).select_from(SpaceTransfer).where(SpaceTransfer.space_id == space_id)).one()
+    if tr_count > 0:
+        raise HTTPException(status_code=400, detail=f"Cannot delete: {tr_count} transfers reference this space")
+    session.delete(sp)
+    session.commit()
+    return {"ok": True}
+
+
+@app.get("/admin/users-list", dependencies=[Depends(require_admin)])
+def admin_list_users(session: Session = Depends(get_session)):
+    users = session.exec(select(User)).all()
+    return [
+        {"id": u.id, "telegram_id": u.telegram_id, "name": u.name, "role": u.role, "is_active": u.is_active}
+        for u in users
+    ]
+
+
+@app.get("/admin/summary", dependencies=[Depends(require_admin)])
+def admin_summary(start: datetime | None = None, end: datetime | None = None,
+                  session: Session = Depends(get_session)):
+    now = datetime.utcnow()
+    if not start or not end:
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = (start + timedelta(days=32)).replace(day=1)
+
+    txs = session.exec(
+        select(Transaction).where(Transaction.happened_at >= start, Transaction.happened_at < end)
+    ).all()
+    cats = {c.id: c for c in session.exec(select(Category)).all()}
+
+    income_total_c = 0
+    expense_total_c = 0
+    by_cat_c: dict[tuple[str, str], int] = {}
+
+    for tx in txs:
+        cat = cats.get(tx.category_id)
+        cat_name = cat.name if cat else "Unknown"
+        key = (cat_name, tx.type)
+        by_cat_c[key] = by_cat_c.get(key, 0) + tx.amount_cents
+        if tx.type == "income":
+            income_total_c += tx.amount_cents
+        else:
+            expense_total_c += tx.amount_cents
+
+    items = [
+        {"category": k[0], "type": k[1], "total": v / 100.0}
+        for k, v in sorted(by_cat_c.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+    all_txs = session.exec(select(Transaction)).all()
+    all_income_c = sum(tx.amount_cents for tx in all_txs if tx.type == "income")
+    all_expense_c = sum(tx.amount_cents for tx in all_txs if tx.type == "expense")
+
+    all_transfers = session.exec(
+        select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+        .group_by(SpaceTransfer.direction)
+    ).all()
+    all_to_space_c = sum(int(s or 0) for d, s in all_transfers if d == "to_space")
+    all_from_space_c = sum(int(s or 0) for d, s in all_transfers if d == "from_space")
+
+    cash_balance_c = (all_income_c - all_expense_c) - all_to_space_c + all_from_space_c
+
+    spaces = session.exec(select(Space)).all()
+    spaces_total_c = 0
+    space_items = []
+    for sp in spaces:
+        r2 = session.exec(
+            select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+            .where(SpaceTransfer.space_id == sp.id)
+            .group_by(SpaceTransfer.direction)
+        ).all()
+        to_c = sum(int(s or 0) for d, s in r2 if d == "to_space")
+        from_c = sum(int(s or 0) for d, s in r2 if d == "from_space")
+        bal_c = to_c - from_c
+        spaces_total_c += bal_c
+        space_items.append({"space": sp.name, "balance": bal_c / 100.0})
+
+    total_assets_c = cash_balance_c + spaces_total_c
+
+    return {
+        "start": start.isoformat(),
+        "end": end.isoformat(),
+        "income_total": income_total_c / 100.0,
+        "expense_total": expense_total_c / 100.0,
+        "cash_balance": cash_balance_c / 100.0,
+        "spaces_total": spaces_total_c / 100.0,
+        "total_assets": total_assets_c / 100.0,
+        "spaces": space_items,
+        "by_category": items,
+    }

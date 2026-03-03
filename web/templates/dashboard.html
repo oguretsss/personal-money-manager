@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set active = "dashboard" %}
+{% block title %}Dashboard - MoneyManage Admin{% endblock %}
+{% block content %}
+<h2>Dashboard</h2>
+
+{% if summary %}
+<div class="stat-grid">
+    <div class="stat-card">
+        <h3>Income (this month)</h3>
+        <p class="text-green">${{ "%.2f"|format(summary.income_total) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Expenses (this month)</h3>
+        <p class="text-red">${{ "%.2f"|format(summary.expense_total) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Cash Balance</h3>
+        <p>${{ "%.2f"|format(summary.cash_balance) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Spaces Total</h3>
+        <p>${{ "%.2f"|format(summary.spaces_total) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Total Assets</h3>
+        <p>${{ "%.2f"|format(summary.total_assets) }}</p>
+    </div>
+</div>
+
+{% if summary.spaces %}
+<h3>Spaces</h3>
+<table>
+    <thead><tr><th>Space</th><th class="text-right">Balance</th></tr></thead>
+    <tbody>
+    {% for sp in summary.spaces %}
+    <tr><td>{{ sp.space }}</td><td class="amount">${{ "%.2f"|format(sp.balance) }}</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% if summary.by_category %}
+<h3>This Month by Category</h3>
+<table>
+    <thead><tr><th>Category</th><th>Type</th><th class="text-right">Total</th></tr></thead>
+    <tbody>
+    {% for item in summary.by_category %}
+    <tr>
+        <td>{{ item.category }}</td>
+        <td>{{ item.type }}</td>
+        <td class="amount {% if item.type == 'income' %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(item.total) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% else %}
+<p>Unable to load summary data.</p>
+{% endif %}
+
+{% if users %}
+<h3>Users</h3>
+<table>
+    <thead><tr><th>Name</th><th>Telegram ID</th><th>Role</th><th>Active</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+        <td>{{ u.name }}</td>
+        <td>{{ u.telegram_id }}</td>
+        <td>{{ u.role }}</td>
+        <td>{{ "Yes" if u.is_active else "No" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endblock %}
