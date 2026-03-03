@@ -118,16 +118,20 @@ def create_transaction(
     amount: float = Form(),
     category_name: str = Form(),
     created_by_telegram_id: int = Form(),
+    happened_at: str = Form(""),
     note: str = Form(""),
 ):
+    data = {
+        "type": type,
+        "amount": amount,
+        "category_name": category_name,
+        "created_by_telegram_id": created_by_telegram_id,
+        "note": note,
+    }
+    if happened_at:
+        data["happened_at"] = happened_at + "T00:00:00"
     try:
-        api.create_transaction({
-            "type": type,
-            "amount": amount,
-            "category_name": category_name,
-            "created_by_telegram_id": created_by_telegram_id,
-            "note": note,
-        })
+        api.create_transaction(data)
         flash(request, "Transaction created", "success")
     except httpx.HTTPStatusError as e:
         detail = e.response.json().get("detail", str(e))
@@ -142,14 +146,18 @@ def edit_transaction(
     _user: str = Depends(require_login),
     amount: float = Form(),
     category_name: str = Form(),
+    happened_at: str = Form(""),
     note: str = Form(""),
 ):
+    data = {
+        "amount": amount,
+        "category_name": category_name,
+        "note": note,
+    }
+    if happened_at:
+        data["happened_at"] = happened_at + "T00:00:00"
     try:
-        api.update_transaction(tx_id, {
-            "amount": amount,
-            "category_name": category_name,
-            "note": note,
-        })
+        api.update_transaction(tx_id, data)
         flash(request, "Transaction updated", "success")
     except httpx.HTTPStatusError as e:
         detail = e.response.json().get("detail", str(e))

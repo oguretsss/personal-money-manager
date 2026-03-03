@@ -5,8 +5,8 @@
 <h2>Transactions</h2>
 
 <!-- Filters -->
-<details>
-    <summary>Filter</summary>
+<details class="panel" {% if filter_type or filter_category %}open{% endif %}>
+    <summary>&#x1F50D; Filter</summary>
     <form method="get" action="/transactions">
         <div class="grid">
             <label>
@@ -32,48 +32,59 @@
 </details>
 
 <!-- Add Transaction -->
-<details>
-    <summary>Add Transaction</summary>
-    <form method="post" action="/transactions">
-        <div class="grid">
-            <label>
-                Type
-                <select name="type" required>
-                    <option value="expense">Expense</option>
-                    <option value="income">Income</option>
-                </select>
-            </label>
-            <label>
-                Amount
-                <input type="number" name="amount" step="0.01" min="0.01" required>
-            </label>
-            <label>
-                Category
-                <input type="text" name="category_name" required list="cat-list">
-                <datalist id="cat-list">
-                    {% for c in categories %}
-                    <option value="{{ c.name }}">
-                    {% endfor %}
-                </datalist>
-            </label>
-        </div>
-        <div class="grid">
-            <label>
-                User
-                <select name="created_by_telegram_id" required>
-                    {% for u in users %}
-                    <option value="{{ u.telegram_id }}">{{ u.name }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label>
-                Note
-                <input type="text" name="note">
-            </label>
-        </div>
-        <button type="submit">Add</button>
-    </form>
-</details>
+<dialog id="add-tx-dialog">
+    <article>
+        <header>
+            <button aria-label="Close" rel="prev" onclick="document.getElementById('add-tx-dialog').close()"></button>
+            <h3>Add Transaction</h3>
+        </header>
+        <form method="post" action="/transactions">
+            <div class="grid">
+                <label>
+                    Type
+                    <select name="type" required>
+                        <option value="expense">Expense</option>
+                        <option value="income">Income</option>
+                    </select>
+                </label>
+                <label>
+                    Amount
+                    <input type="number" name="amount" step="0.01" min="0.01" required>
+                </label>
+                <label>
+                    Category
+                    <input type="text" name="category_name" required list="cat-list">
+                    <datalist id="cat-list">
+                        {% for c in categories %}
+                        <option value="{{ c.name }}">
+                        {% endfor %}
+                    </datalist>
+                </label>
+            </div>
+            <div class="grid">
+                <label>
+                    User
+                    <select name="created_by_telegram_id" required>
+                        {% for u in users %}
+                        <option value="{{ u.telegram_id }}">{{ u.name }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    Date
+                    <input type="date" name="happened_at">
+                </label>
+                <label>
+                    Note
+                    <input type="text" name="note">
+                </label>
+            </div>
+            <button type="submit">&#x2795; Add Transaction</button>
+        </form>
+    </article>
+</dialog>
+
+<button onclick="document.getElementById('add-tx-dialog').showModal()" style="margin-bottom: 1.5rem;">&#x2795; Add Transaction</button>
 
 <!-- Transactions Table -->
 <table>
@@ -101,6 +112,7 @@
                 <form method="post" action="/transactions/{{ tx.id }}/edit">
                     <label>Amount <input type="number" name="amount" step="0.01" value="{{ tx.amount }}" required></label>
                     <label>Category <input type="text" name="category_name" value="{{ tx.category }}" required></label>
+                    <label>Date <input type="date" name="happened_at" value="{{ tx.happened_at[:10] }}"></label>
                     <label>Note <input type="text" name="note" value="{{ tx.note }}"></label>
                     <button type="submit">Save</button>
                 </form>
