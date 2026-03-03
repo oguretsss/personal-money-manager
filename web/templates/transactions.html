@@ -79,7 +79,7 @@
         </tr>
     </thead>
     <tbody>
-    {% for tx in data.items %}
+    {% for tx in data["items"] %}
     <tr>
         <td>{{ tx.happened_at[:10] }}</td>
         <td>{{ tx.type }}</td>
@@ -102,7 +102,7 @@
         </td>
     </tr>
     {% endfor %}
-    {% if not data.items %}
+    {% if not data["items"] %}
     <tr><td colspan="6">No transactions found.</td></tr>
     {% endif %}
     </tbody>
