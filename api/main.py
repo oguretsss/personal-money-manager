@@ -424,6 +424,7 @@ def space_transfer(payload: SpaceTransferCreate, telegram_id: int, session: Sess
 @app.get("/admin/transactions", dependencies=[Depends(require_admin)])
 def admin_list_transactions(
     type: str | None = None,
+    category: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
     page: int = 1,
@@ -433,14 +434,18 @@ def admin_list_transactions(
     stmt = select(Transaction, Category.name).join(Category, Transaction.category_id == Category.id)
     if type:
         stmt = stmt.where(Transaction.type == type)
+    if category:
+        stmt = stmt.where(Category.name == category)
     if start:
         stmt = stmt.where(Transaction.happened_at >= start)
     if end:
         stmt = stmt.where(Transaction.happened_at < end)
 
-    count_stmt = select(func.count()).select_from(Transaction)
+    count_stmt = select(func.count()).select_from(Transaction).join(Category, Transaction.category_id == Category.id)
     if type:
         count_stmt = count_stmt.where(Transaction.type == type)
+    if category:
+        count_stmt = count_stmt.where(Category.name == category)
     if start:
         count_stmt = count_stmt.where(Transaction.happened_at >= start)
     if end:

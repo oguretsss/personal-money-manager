@@ -88,10 +88,11 @@ def transactions_page(
     request: Request,
     _user: str = Depends(require_login),
     type: str | None = None,
+    category: str | None = None,
     page: int = 1,
 ):
     try:
-        data = api.list_transactions(type=type, page=page, per_page=50)
+        data = api.list_transactions(type=type, category=category, page=page, per_page=50)
         categories = api.list_categories()
         users = api.list_users()
     except httpx.HTTPError:
@@ -104,6 +105,7 @@ def transactions_page(
         "categories": categories,
         "users": users,
         "filter_type": type,
+        "filter_category": category,
         "messages": get_flashed_messages(request),
     })
 

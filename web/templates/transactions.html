@@ -17,6 +17,15 @@
                     <option value="income" {% if filter_type == "income" %}selected{% endif %}>Income</option>
                 </select>
             </label>
+            <label>
+                Category
+                <select name="category">
+                    <option value="">All</option>
+                    {% for c in categories %}
+                    <option value="{{ c.name }}" {% if filter_category == c.name %}selected{% endif %}>{{ c.name }} ({{ c.type }})</option>
+                    {% endfor %}
+                </select>
+            </label>
         </div>
         <button type="submit">Apply</button>
     </form>
@@ -115,7 +124,7 @@
     <ul>
         {% for p in range(1, total_pages + 1) %}
         <li>
-            <a href="/transactions?page={{ p }}{% if filter_type %}&type={{ filter_type }}{% endif %}"
+            <a href="/transactions?page={{ p }}{% if filter_type %}&type={{ filter_type }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}"
                {% if p == data.page %}aria-current="page"{% endif %}>{{ p }}</a>
         </li>
         {% endfor %}
