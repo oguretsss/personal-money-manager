@@ -53,12 +53,12 @@
                 </label>
                 <label>
                     Category
-                    <input type="text" name="category_name" required list="cat-list">
-                    <datalist id="cat-list">
+                    <select name="category_name" required>
+                        <option value="">Select...</option>
                         {% for c in categories %}
-                        <option value="{{ c.name }}">
+                        <option value="{{ c.name }}">{{ c.name }} ({{ c.type }})</option>
                         {% endfor %}
-                    </datalist>
+                    </select>
                 </label>
             </div>
             <div class="grid">
