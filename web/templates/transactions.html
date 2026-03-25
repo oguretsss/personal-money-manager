@@ -162,7 +162,7 @@
         <td data-label="Amount" class="amount {% if tx.type == 'income' %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(tx.amount) }}</td>
         <td data-label="Note">{{ tx.note }}</td>
         <td class="actions-cell">
-            <button class="btn-sm" @click='openEdit({{ tx | tojson }})'>Edit</button>
+            <button class="btn-sm" @click="openEdit(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Edit</button>
             <button class="btn-sm btn-danger" @click="confirmDelete({{ tx.id }})">Delete</button>
         </td>
     </tr>

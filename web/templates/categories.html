@@ -49,7 +49,7 @@
         <td class="actions-cell">
             <template x-if="editId !== {{ cat.id }}">
                 <span style="display:flex;gap:0.5rem;">
-                    <button class="btn-sm" @click="startRename({ id: {{ cat.id }}, name: '{{ cat.name }}' })">Rename</button>
+                    <button class="btn-sm" @click="startRename({ id: {{ cat.id }}, name: decodeURIComponent($el.dataset.name) })" data-name="{{ cat.name | urlencode }}">Rename</button>
                     <button class="btn-sm btn-danger" @click="confirmDelete({{ cat.id }})">Delete</button>
                 </span>
             </template>
