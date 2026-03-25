@@ -30,11 +30,11 @@
 
 {% if summary.spaces %}
 <h3>Spaces</h3>
-<table>
+<table class="responsive-table">
     <thead><tr><th>Space</th><th class="text-right">Balance</th></tr></thead>
     <tbody>
     {% for sp in summary.spaces %}
-    <tr><td>{{ sp.space }}</td><td class="amount">${{ "%.2f"|format(sp.balance) }}</td></tr>
+    <tr><td data-label="Space">{{ sp.space }}</td><td data-label="Balance" class="amount">${{ "%.2f"|format(sp.balance) }}</td></tr>
     {% endfor %}
     </tbody>
 </table>
@@ -45,19 +45,19 @@
 
 {% set expense_cats = summary.by_category | selectattr("type", "equalto", "expense") | list %}
 {% if expense_cats %}
-<div style="max-width: 400px; margin: 0 auto 2rem;">
+<div style="max-width: 100%; margin: 0 auto 2rem;">
     <canvas id="expensePie"></canvas>
 </div>
 {% endif %}
 
-<table>
+<table class="responsive-table">
     <thead><tr><th>Category</th><th>Type</th><th class="text-right">Total</th></tr></thead>
     <tbody>
     {% for item in summary.by_category %}
     <tr>
-        <td>{{ item.category }}</td>
-        <td>{{ item.type }}</td>
-        <td class="amount {% if item.type == 'income' %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(item.total) }}</td>
+        <td data-label="Category">{{ item.category }}</td>
+        <td data-label="Type">{{ item.type }}</td>
+        <td data-label="Total" class="amount {% if item.type == 'income' %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(item.total) }}</td>
     </tr>
     {% endfor %}
     </tbody>
@@ -81,7 +81,7 @@ new Chart(document.getElementById('expensePie'), {
     },
     options: {
         plugins: {
-            legend: { position: 'right' },
+            legend: { position: window.innerWidth < 768 ? 'bottom' : 'right' },
             tooltip: {
                 callbacks: {
                     label: function(ctx) {
@@ -104,14 +104,14 @@ new Chart(document.getElementById('expensePie'), {
 
 {% if users %}
 <h3>Users</h3>
-<table>
+<table class="responsive-table">
     <thead><tr><th>Name</th><th>Role</th><th>Active</th></tr></thead>
     <tbody>
     {% for u in users %}
     <tr>
-        <td>{{ u.name }}</td>
-        <td>{{ u.role }}</td>
-        <td>{{ "Yes" if u.is_active else "No" }}</td>
+        <td data-label="Name">{{ u.name }}</td>
+        <td data-label="Role">{{ u.role }}</td>
+        <td data-label="Active">{{ "Yes" if u.is_active else "No" }}</td>
     </tr>
     {% endfor %}
     </tbody>

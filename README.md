@@ -1,6 +1,6 @@
 # MoneyManage
 
-A family budget management system with a FastAPI backend and Telegram bot frontend. Track income, expenses, and manage savings through virtual "spaces" (savings containers).
+A family budget management system with a FastAPI backend, Telegram bot frontend, and mobile-friendly web admin panel. Track income, expenses, and manage savings through virtual "spaces" (savings containers).
 
 ## Features
 
@@ -9,6 +9,12 @@ A family budget management system with a FastAPI backend and Telegram bot fronte
 - **Savings Spaces** - Create virtual containers to organize savings goals
 - **Telegram Interface** - Manage finances directly from Telegram
 - **Quick Entry** - Send just a number to quickly add an expense
+- **Web Admin Panel** - Mobile-friendly reactive UI for managing all data
+  - Dashboard with expense pie chart and financial summary
+  - Transaction management with add/edit/delete (no page reloads)
+  - Quick expense button (FAB) accessible from every page
+  - Responsive design — tables convert to cards on mobile
+  - Categories and spaces management with inline editing
 
 ## Tech Stack
 
@@ -17,6 +23,7 @@ A family budget management system with a FastAPI backend and Telegram bot fronte
 | Backend API | FastAPI, SQLModel, Uvicorn |
 | Database | SQLite |
 | Bot | aiogram 3 (async Telegram framework) |
+| Web Admin | FastAPI, Jinja2, Alpine.js, Pico CSS, Chart.js |
 | Containerization | Docker, Docker Compose |
 
 ## Quick Start
@@ -81,6 +88,15 @@ MoneyManage/
 │   ├── api_client.py       # HTTP client for API
 │   └── states.py           # FSM conversation states
 │
+├── web/                    # Web admin panel
+│   ├── main.py             # Routes + JSON API proxy
+│   ├── auth.py             # Cookie session auth
+│   ├── api_client.py       # HTTP client for admin API
+│   ├── static/             # CSS and JavaScript
+│   │   ├── app.css         # Responsive styles, FAB, toasts
+│   │   └── app.js          # Alpine.js components and stores
+│   └── templates/          # Jinja2 templates
+│
 ├── docker-compose.yml      # Container orchestration
 └── data/                   # Database storage
 ```
@@ -91,6 +107,7 @@ The system follows a microservices pattern:
 
 - **API Service** - Owns all data and business logic. SQLite database accessed only here.
 - **Bot Service** - Telegram UI layer. Communicates with API via HTTP.
+- **Web Admin** - Browser-based admin panel. Uses Alpine.js for reactive UI with no build step. Communicates with API via server-side proxy (admin token never exposed to browser).
 
 **Key Design Decisions:**
 - Financial amounts stored as cents (integers) to avoid floating-point issues

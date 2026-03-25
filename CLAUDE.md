@@ -56,7 +56,7 @@ uvicorn main:app --host 0.0.0.0 --port 8002 --reload
 ### Service Separation
 - **api/** - FastAPI REST backend, owns all data and business logic
 - **bot/** - Telegram interface only, communicates exclusively via HTTP to API
-- **web/** - Admin panel (FastAPI + Jinja2 + Pico CSS), communicates via HTTP to API with admin token
+- **web/** - Admin panel (FastAPI + Jinja2 + Alpine.js + Pico CSS), communicates via HTTP to API with admin token
 - Database (SQLite) is accessed only by the API service
 
 ### Key Patterns
@@ -118,16 +118,34 @@ Main menu: Expense, Income, Spaces, Summary. Quick entry: sending just a number 
 
 ### Web Admin Panel (web/)
 
-**Tech:** FastAPI + Jinja2 templates + Pico CSS (CDN) + Chart.js (CDN). No build step.
+**Tech:** FastAPI + Jinja2 templates + Alpine.js (CDN) + Pico CSS (CDN) + Chart.js (CDN). No build step.
+
+**Frontend architecture:** Server-side Jinja2 renders initial HTML, Alpine.js adds reactivity (modals, AJAX CRUD, toasts). All CRUD operations use `fetch()` calls to JSON proxy endpoints — no full page reloads for add/edit/delete. The admin API token is never exposed to the browser; `/api/*` proxy endpoints in `web/main.py` handle auth server-side.
 
 **Pages:**
 - Login — username/password auth
-- Dashboard — income/expense totals, cash balance, spaces, expense pie chart by category
-- Transactions — paginated table with type/category filters, add/edit/delete
-- Categories — table with rename/delete actions
-- Spaces — table with rename/delete actions
+- Dashboard — income/expense totals, cash balance, spaces, expense pie chart by category (responsive)
+- Transactions — paginated table with type/category filters, reactive add/edit/delete via modals
+- Categories — table with inline rename, reactive delete with confirmation
+- Spaces — table with inline rename, reactive delete with confirmation
+- Quick Expense FAB — floating action button on all pages for rapid expense entry
 
 **Key files:**
-- `web/main.py` — All routes (login, dashboard, transactions, categories, spaces)
+- `web/main.py` — Page routes + `/api/*` JSON proxy endpoints
 - `web/auth.py` — Cookie session auth (itsdangerous, cookie name: `auth_token`)
 - `web/api_client.py` — Sync httpx client calling API admin endpoints
+- `web/static/app.js` — Alpine.js stores (toast, app data), components (FAB, transactions, categories, spaces), `apiCall()` fetch wrapper
+- `web/static/app.css` — Responsive styles, mobile nav, FAB, toasts, table-to-card mobile layout
+
+**JSON proxy endpoints (web/main.py, require session cookie):**
+- `GET/POST /api/transactions`, `PUT/DELETE /api/transactions/{id}`
+- `GET /api/categories`, `POST /api/categories/{id}/rename`, `DELETE /api/categories/{id}`
+- `GET /api/spaces`, `POST /api/spaces/{id}/rename`, `DELETE /api/spaces/{id}`
+- `GET /api/users`, `GET /api/summary`
+
+**Mobile-friendly features:**
+- Responsive hamburger nav (collapses at 768px)
+- Tables convert to stacked cards on mobile via CSS `data-label` pattern
+- FAB (floating action button) for quick expense on all pages
+- Bottom-sheet modals on mobile, centered modals on desktop
+- Touch-friendly 44px minimum tap targets, 16px font on inputs (prevents iOS zoom)

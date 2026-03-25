@@ -1,5 +1,8 @@
-from fastapi import FastAPI, Request, Form, Depends
-from fastapi.responses import HTMLResponse, RedirectResponse
+from pathlib import Path
+
+from fastapi import FastAPI, Request, Form, Depends, Body
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 import httpx
@@ -14,9 +17,10 @@ from api_client import AdminApiClient
 app = FastAPI(title="MoneyManage Admin")
 app.add_middleware(SessionMiddleware, secret_key=WEB_SECRET_KEY)
 
-
 @app.exception_handler(NotAuthenticated)
 async def not_authenticated_handler(request: Request, exc: NotAuthenticated):
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"error": "Not authenticated"}, status_code=401)
     return RedirectResponse("/login", status_code=303)
 templates = Jinja2Templates(directory="templates")
 
@@ -248,3 +252,119 @@ def delete_space(space_id: int, request: Request, _user: str = Depends(require_l
         detail = e.response.json().get("detail", str(e))
         flash(request, f"Error: {detail}", "error")
     return RedirectResponse("/spaces", status_code=303)
+
+
+# ── JSON API proxy endpoints ─────────────────────────────────────────
+
+def _error_json(e: httpx.HTTPStatusError) -> JSONResponse:
+    detail = e.response.json().get("detail", str(e))
+    return JSONResponse({"error": detail}, status_code=e.response.status_code)
+
+
+@app.get("/api/summary")
+def api_summary(_user: str = Depends(require_login)):
+    try:
+        return api.get_summary()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/transactions")
+def api_list_transactions(
+    _user: str = Depends(require_login),
+    type: str | None = None,
+    category: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
+):
+    try:
+        return api.list_transactions(type=type, category=category, page=page, per_page=per_page)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/transactions")
+def api_create_transaction(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_transaction(data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.put("/api/transactions/{tx_id}")
+def api_update_transaction(tx_id: int, _user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.update_transaction(tx_id, data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/transactions/{tx_id}")
+def api_delete_transaction(tx_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.delete_transaction(tx_id)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/categories")
+def api_list_categories(_user: str = Depends(require_login)):
+    try:
+        return api.list_categories()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/categories/{cat_id}/rename")
+def api_rename_category(cat_id: int, _user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.rename_category(cat_id, data.get("name", ""))
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/categories/{cat_id}")
+def api_delete_category(cat_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.delete_category(cat_id)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/spaces")
+def api_list_spaces(_user: str = Depends(require_login)):
+    try:
+        return api.list_spaces()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/spaces/{space_id}/rename")
+def api_rename_space(space_id: int, _user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.rename_space(space_id, data.get("name", ""))
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/spaces/{space_id}")
+def api_delete_space(space_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.delete_space(space_id)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/users")
+def api_list_users(_user: str = Depends(require_login)):
+    try:
+        return api.list_users()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+# ── Static files (must be last — catch-all mount) ────────────────────
+
+static_dir = Path(__file__).parent / "static"
+static_dir.mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")

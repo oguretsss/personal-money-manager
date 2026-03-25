@@ -2,9 +2,24 @@
 {% set active = "spaces" %}
 {% block title %}Spaces - MoneyManage Admin{% endblock %}
 {% block content %}
+<div x-data="spacesPage({{ spaces | tojson }})">
 <h2>Spaces</h2>
 
-<table>
+<!-- Delete Confirmation -->
+<template x-if="showConfirm">
+    <div class="confirm-overlay" @click.self="showConfirm = false">
+        <div class="confirm-box">
+            <p>Delete this space?</p>
+            <div class="confirm-actions">
+                <button @click="showConfirm = false" class="secondary">Cancel</button>
+                <button @click="doDelete()" :disabled="loading" class="btn-danger"
+                        x-text="loading ? 'Deleting...' : 'Delete'"></button>
+            </div>
+        </div>
+    </div>
+</template>
+
+<table class="responsive-table">
     <thead>
         <tr>
             <th>Name</th>
@@ -15,19 +30,27 @@
     <tbody>
     {% for sp in spaces %}
     <tr>
-        <td>{{ sp.name }}</td>
-        <td class="amount">${{ "%.2f"|format(sp.balance) }}</td>
-        <td>
-            <details>
-                <summary>Rename</summary>
-                <form method="post" action="/spaces/{{ sp.id }}/rename">
-                    <label>New name <input type="text" name="name" value="{{ sp.name }}" required></label>
-                    <button type="submit">Save</button>
+        <td data-label="Name">
+            <template x-if="editId === {{ sp.id }}">
+                <form @submit.prevent="submitRename({{ sp.id }})" style="display:flex;gap:0.5rem;align-items:center;margin:0;">
+                    <input type="text" x-model="editName" x-ref="renameInput{{ sp.id }}"
+                           style="margin:0;padding:0.3rem 0.5rem;" required>
+                    <button type="submit" class="btn-sm" :disabled="loading">Save</button>
+                    <button type="button" class="btn-sm secondary" @click="cancelRename()">Cancel</button>
                 </form>
-            </details>
-            <form method="post" action="/spaces/{{ sp.id }}/delete" onsubmit="return confirm('Delete space {{ sp.name }}?')">
-                <button type="submit" class="secondary outline">Delete</button>
-            </form>
+            </template>
+            <template x-if="editId !== {{ sp.id }}">
+                <span>{{ sp.name }}</span>
+            </template>
+        </td>
+        <td data-label="Balance" class="amount">${{ "%.2f"|format(sp.balance) }}</td>
+        <td class="actions-cell">
+            <template x-if="editId !== {{ sp.id }}">
+                <span style="display:flex;gap:0.5rem;">
+                    <button class="btn-sm" @click="startRename({ id: {{ sp.id }}, name: '{{ sp.name }}' })">Rename</button>
+                    <button class="btn-sm btn-danger" @click="confirmDelete({{ sp.id }})">Delete</button>
+                </span>
+            </template>
         </td>
     </tr>
     {% endfor %}
@@ -36,4 +59,5 @@
     {% endif %}
     </tbody>
 </table>
+</div>
 {% endblock %}

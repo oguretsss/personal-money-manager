@@ -2,9 +2,24 @@
 {% set active = "categories" %}
 {% block title %}Categories - MoneyManage Admin{% endblock %}
 {% block content %}
+<div x-data="categoriesPage({{ categories | tojson }})">
 <h2>Categories</h2>
 
-<table>
+<!-- Delete Confirmation -->
+<template x-if="showConfirm">
+    <div class="confirm-overlay" @click.self="showConfirm = false">
+        <div class="confirm-box">
+            <p>Delete this category?</p>
+            <div class="confirm-actions">
+                <button @click="showConfirm = false" class="secondary">Cancel</button>
+                <button @click="doDelete()" :disabled="loading" class="btn-danger"
+                        x-text="loading ? 'Deleting...' : 'Delete'"></button>
+            </div>
+        </div>
+    </div>
+</template>
+
+<table class="responsive-table">
     <thead>
         <tr>
             <th>Name</th>
@@ -16,20 +31,28 @@
     <tbody>
     {% for cat in categories %}
     <tr>
-        <td>{{ cat.name }}</td>
-        <td>{{ cat.type }}</td>
-        <td class="text-right">{{ cat.usage_count }}</td>
-        <td>
-            <details>
-                <summary>Rename</summary>
-                <form method="post" action="/categories/{{ cat.id }}/rename">
-                    <label>New name <input type="text" name="name" value="{{ cat.name }}" required></label>
-                    <button type="submit">Save</button>
+        <td data-label="Name">
+            <template x-if="editId === {{ cat.id }}">
+                <form @submit.prevent="submitRename({{ cat.id }})" style="display:flex;gap:0.5rem;align-items:center;margin:0;">
+                    <input type="text" x-model="editName" x-ref="renameInput{{ cat.id }}"
+                           style="margin:0;padding:0.3rem 0.5rem;" required>
+                    <button type="submit" class="btn-sm" :disabled="loading">Save</button>
+                    <button type="button" class="btn-sm secondary" @click="cancelRename()">Cancel</button>
                 </form>
-            </details>
-            <form method="post" action="/categories/{{ cat.id }}/delete" onsubmit="return confirm('Delete category {{ cat.name }}?')">
-                <button type="submit" class="secondary outline">Delete</button>
-            </form>
+            </template>
+            <template x-if="editId !== {{ cat.id }}">
+                <span>{{ cat.name }}</span>
+            </template>
+        </td>
+        <td data-label="Type">{{ cat.type }}</td>
+        <td data-label="Transactions" class="text-right">{{ cat.usage_count }}</td>
+        <td class="actions-cell">
+            <template x-if="editId !== {{ cat.id }}">
+                <span style="display:flex;gap:0.5rem;">
+                    <button class="btn-sm" @click="startRename({ id: {{ cat.id }}, name: '{{ cat.name }}' })">Rename</button>
+                    <button class="btn-sm btn-danger" @click="confirmDelete({{ cat.id }})">Delete</button>
+                </span>
+            </template>
         </td>
     </tr>
     {% endfor %}
@@ -38,4 +61,5 @@
     {% endif %}
     </tbody>
 </table>
+</div>
 {% endblock %}

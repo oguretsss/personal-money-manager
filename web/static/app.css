@@ -1,0 +1,257 @@
+/* ── Existing styles (moved from base.html) ─────────────────────────── */
+
+nav ul li a.active { font-weight: bold; text-decoration: underline; }
+.flash { padding: 0.75rem 1rem; border-radius: 4px; margin-bottom: 1rem; }
+.flash.success { background: #1b5e20; color: #a5d6a7; }
+.flash.error { background: #b71c1c; color: #ef9a9a; }
+.flash.info { background: #0d47a1; color: #90caf9; }
+table form { display: inline; margin: 0; }
+table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
+.amount { font-family: monospace; text-align: right; }
+.text-right { text-align: right; }
+.text-green { color: #66bb6a; }
+.text-red { color: #ef5350; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+.stat-card { padding: 1rem; border: 1px solid #444; border-radius: 8px; text-align: center; }
+.stat-card h3 { margin: 0; font-size: 0.9rem; color: #aaa; }
+.stat-card p { margin: 0.5rem 0 0; font-size: 1.5rem; font-weight: bold; }
+.panel { border: 1px solid #444; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+.panel summary { font-weight: bold; font-size: 1.05rem; cursor: pointer; }
+
+/* ── Responsive nav ─────────────────────────────────────────────────── */
+
+.nav-brand { display: flex; align-items: center; gap: 0.5rem; }
+.nav-toggle { display: none; background: none; border: none; color: #fff; font-size: 1.5rem; cursor: pointer; padding: 0.25rem 0.5rem; }
+.nav-links { display: flex; gap: 0; list-style: none; margin: 0; padding: 0; }
+.nav-links li { display: flex; align-items: center; }
+
+@media (max-width: 768px) {
+    .nav-toggle { display: block; }
+    .nav-links {
+        display: none;
+        flex-direction: column;
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: var(--pico-background-color, #1a1a2e);
+        border-bottom: 1px solid #444;
+        padding: 0.5rem 0;
+        z-index: 50;
+    }
+    .nav-links.open { display: flex; }
+    .nav-links li { padding: 0.5rem 1.5rem; }
+    .nav-links li a { display: block; width: 100%; padding: 0.5rem 0; }
+    nav.container-fluid { position: relative; }
+}
+
+/* ── Toast notifications ────────────────────────────────────────────── */
+
+.toast-container {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 200;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    pointer-events: none;
+}
+.toast {
+    padding: 0.75rem 1.25rem;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    pointer-events: auto;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    animation: toastIn 0.3s ease-out;
+    max-width: 360px;
+}
+.toast.success { background: #1b5e20; color: #a5d6a7; }
+.toast.error { background: #b71c1c; color: #ef9a9a; }
+.toast.info { background: #0d47a1; color: #90caf9; }
+
+@keyframes toastIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Floating Action Button ─────────────────────────────────────────── */
+
+.fab {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 100;
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    background: #43a047;
+    color: white;
+    font-size: 1.75rem;
+    line-height: 56px;
+    text-align: center;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    transition: transform 0.2s, background 0.2s;
+    padding: 0;
+    margin: 0;
+}
+.fab:hover { background: #388e3c; transform: scale(1.08); }
+
+/* FAB modal overlay */
+.fab-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 150;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+
+/* FAB modal content (bottom sheet on mobile, centered on desktop) */
+.fab-modal {
+    background: var(--pico-background-color, #1a1a2e);
+    border: 1px solid #444;
+    border-radius: 12px 12px 0 0;
+    padding: 1.5rem;
+    width: 100%;
+    max-width: 500px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+.fab-modal h3 { margin-top: 0; margin-bottom: 1rem; }
+.fab-modal .form-row { margin-bottom: 0.75rem; }
+.fab-modal label { display: block; margin-bottom: 0.25rem; font-size: 0.9rem; color: #aaa; }
+.fab-modal input,
+.fab-modal select { width: 100%; font-size: 16px; }
+.fab-modal .form-actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
+.fab-modal .form-actions button { flex: 1; min-height: 44px; }
+
+@media (min-width: 769px) {
+    .fab-overlay { align-items: center; }
+    .fab-modal { border-radius: 12px; }
+}
+
+/* ── Modal (generic) ────────────────────────────────────────────────── */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 150;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+.modal-content {
+    background: var(--pico-background-color, #1a1a2e);
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 1.5rem;
+    width: 100%;
+    max-width: 540px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+.modal-content h3 { margin-top: 0; }
+
+@media (max-width: 768px) {
+    .modal-overlay { align-items: flex-end; padding: 0; }
+    .modal-content { border-radius: 12px 12px 0 0; max-width: 100%; }
+}
+
+/* ── Responsive tables → cards ──────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .responsive-table thead { display: none; }
+    .responsive-table tbody { display: block; }
+    .responsive-table tr {
+        display: block;
+        border: 1px solid #444;
+        border-radius: 8px;
+        margin-bottom: 0.75rem;
+        padding: 0.75rem;
+    }
+    .responsive-table td {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.35rem 0;
+        border: none;
+        font-size: 0.95rem;
+    }
+    .responsive-table td::before {
+        content: attr(data-label);
+        font-weight: bold;
+        color: #aaa;
+        margin-right: 1rem;
+        flex-shrink: 0;
+    }
+    .responsive-table td.actions-cell {
+        justify-content: flex-end;
+        gap: 0.5rem;
+        padding-top: 0.5rem;
+        border-top: 1px solid #333;
+        margin-top: 0.25rem;
+    }
+    .responsive-table td.actions-cell::before { display: none; }
+}
+
+/* ── Touch-friendly buttons & inputs ────────────────────────────────── */
+
+@media (max-width: 768px) {
+    button, .btn, input[type="submit"] { min-height: 44px; }
+    input, select, textarea { font-size: 16px !important; }
+}
+
+/* ── Action buttons in tables ───────────────────────────────────────── */
+
+.btn-sm {
+    padding: 0.3rem 0.6rem;
+    font-size: 0.85rem;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid #555;
+    background: transparent;
+    color: inherit;
+    min-height: 36px;
+}
+.btn-sm:hover { background: #333; }
+.btn-danger { color: #ef5350; border-color: #ef5350; }
+.btn-danger:hover { background: #b71c1c; color: #fff; }
+
+/* ── Confirmation dialog ────────────────────────────────────────────── */
+
+.confirm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+.confirm-box {
+    background: var(--pico-background-color, #1a1a2e);
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 1.5rem;
+    max-width: 400px;
+    width: 100%;
+    text-align: center;
+}
+.confirm-box p { margin-bottom: 1rem; }
+.confirm-box .confirm-actions { display: flex; gap: 0.75rem; justify-content: center; }
+.confirm-box .confirm-actions button { min-width: 100px; min-height: 44px; }
+
+/* ── Utility ────────────────────────────────────────────────────────── */
+
+[x-cloak] { display: none !important; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+@media (max-width: 768px) {
+    .grid-2 { grid-template-columns: 1fr; }
+}
