@@ -223,11 +223,14 @@ def delete_category(cat_id: int, request: Request, _user: str = Depends(require_
 def spaces_page(request: Request, _user: str = Depends(require_login)):
     try:
         spaces = api.list_spaces()
+        users = api.list_users()
     except httpx.HTTPError:
         spaces = []
+        users = []
     return templates.TemplateResponse("spaces.html", {
         "request": request,
         "spaces": spaces,
+        "users": users,
         "messages": get_flashed_messages(request),
     })
 
@@ -351,6 +354,17 @@ def api_rename_space(space_id: int, _user: str = Depends(require_login), data: d
 def api_delete_space(space_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_space(space_id)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/spaces/transfer")
+def api_space_transfer(_user: str = Depends(require_login), data: dict = Body()):
+    telegram_id = data.pop("created_by_telegram_id", None)
+    if not telegram_id:
+        return JSONResponse({"error": "User is required"}, status_code=400)
+    try:
+        return api.space_transfer(int(telegram_id), data)
     except httpx.HTTPStatusError as e:
         return _error_json(e)
 

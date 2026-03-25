@@ -312,13 +312,23 @@ function categoriesPage(initialCategories) {
 
 /* ── Spaces page component ──────────────────────────────────────────── */
 
-function spacesPage(initialSpaces) {
+function spacesPage(initialSpaces, initialUsers) {
     return {
         spaces: initialSpaces || [],
+        users: initialUsers || [],
         editId: null,
         editName: '',
         showConfirm: false,
         confirmId: null,
+        showTransfer: false,
+        transferForm: {
+            space_name: '',
+            direction: 'to_space',
+            amount: '',
+            created_by_telegram_id: '',
+            happened_at: todayDate(),
+            note: '',
+        },
         loading: false,
 
         startRename(space) {
@@ -360,6 +370,45 @@ function spacesPage(initialSpaces) {
             if (result) {
                 Alpine.store('toast').add('Space deleted', 'success');
                 this.showConfirm = false;
+                Alpine.store('app').invalidate();
+                window.location.reload();
+            }
+        },
+
+        openTransfer(spaceName) {
+            this.transferForm.space_name = spaceName;
+            this.transferForm.direction = 'to_space';
+            this.transferForm.amount = '';
+            this.transferForm.happened_at = todayDate();
+            this.transferForm.note = '';
+            if (this.users.length && !this.transferForm.created_by_telegram_id) {
+                this.transferForm.created_by_telegram_id = this.users[0].telegram_id;
+            }
+            this.showTransfer = true;
+        },
+
+        async submitTransfer() {
+            if (!this.transferForm.amount || !this.transferForm.space_name) {
+                Alpine.store('toast').add('Please fill amount and space', 'error');
+                return;
+            }
+            this.loading = true;
+            const payload = {
+                space_name: this.transferForm.space_name,
+                direction: this.transferForm.direction,
+                amount: parseAmount(this.transferForm.amount),
+                created_by_telegram_id: parseInt(this.transferForm.created_by_telegram_id),
+                note: this.transferForm.note || '',
+            };
+            if (this.transferForm.happened_at) {
+                payload.happened_at = this.transferForm.happened_at + 'T00:00:00';
+            }
+            const result = await apiCall('POST', '/api/spaces/transfer', payload);
+            this.loading = false;
+            if (result) {
+                const dir = this.transferForm.direction === 'to_space' ? 'Deposited to' : 'Withdrawn from';
+                Alpine.store('toast').add(`${dir} ${this.transferForm.space_name}`, 'success');
+                this.showTransfer = false;
                 Alpine.store('app').invalidate();
                 window.location.reload();
             }

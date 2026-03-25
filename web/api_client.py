@@ -68,6 +68,11 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def space_transfer(self, telegram_id: int, data: dict) -> dict:
+        r = self._client.post("/spaces/transfer", params={"telegram_id": telegram_id}, json=data)
+        r.raise_for_status()
+        return r.json()
+
     def list_users(self) -> list:
         r = self._client.get("/admin/users-list")
         r.raise_for_status()

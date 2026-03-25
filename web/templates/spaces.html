@@ -2,8 +2,8 @@
 {% set active = "spaces" %}
 {% block title %}Spaces - MoneyManage Admin{% endblock %}
 {% block content %}
-<script id="sp-init-data" type="application/json">{{ spaces | tojson }}</script>
-<div x-data="spacesPage(JSON.parse(document.getElementById('sp-init-data').textContent))">
+<script id="sp-init-data" type="application/json">{{ {"spaces": spaces, "users": users} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('sp-init-data').textContent); return spacesPage(d.spaces, d.users); })()">
 <h2>Spaces</h2>
 
 <!-- Delete Confirmation -->
@@ -14,6 +14,55 @@
             <button @click="showConfirm = false" class="secondary">Cancel</button>
             <button @click="doDelete()" :disabled="loading" class="btn-danger"
                     x-text="loading ? 'Deleting...' : 'Delete'"></button>
+        </div>
+    </div>
+</div>
+
+<!-- Transfer Modal -->
+<div x-show="showTransfer" x-cloak class="modal-overlay" @click.self="showTransfer = false">
+    <div class="modal-content">
+        <h3>Transfer Funds</h3>
+        <div class="form-row">
+            <label>Space</label>
+            <input type="text" x-model="transferForm.space_name" disabled
+                   style="opacity:0.7;">
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Direction</label>
+                <select x-model="transferForm.direction">
+                    <option value="to_space">Deposit to space</option>
+                    <option value="from_space">Withdraw from space</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Amount</label>
+                <input type="text" inputmode="decimal" x-model="transferForm.amount"
+                       placeholder="0.00">
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>User</label>
+                <select x-model="transferForm.created_by_telegram_id">
+                    <template x-for="u in users" :key="u.id">
+                        <option :value="u.telegram_id" x-text="u.name"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Date</label>
+                <input type="date" x-model="transferForm.happened_at">
+            </div>
+        </div>
+        <div class="form-row">
+            <label>Note</label>
+            <input type="text" x-model="transferForm.note" placeholder="Optional">
+        </div>
+        <div class="form-actions">
+            <button @click="showTransfer = false" class="secondary">Cancel</button>
+            <button @click="submitTransfer()" :disabled="loading"
+                    x-text="loading ? 'Saving...' : 'Transfer'"></button>
         </div>
     </div>
 </div>
@@ -40,8 +89,9 @@
         </td>
         <td data-label="Balance" class="amount">${{ "%.2f"|format(sp.balance) }}</td>
         <td class="actions-cell">
-            <span x-show="editId !== {{ sp.id }}" style="display:flex;gap:0.5rem;">
+            <span x-show="editId !== {{ sp.id }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
                 <button class="btn-sm" @click="startRename({ id: {{ sp.id }}, name: decodeURIComponent($el.dataset.name) })" data-name="{{ sp.name | urlencode }}">Rename</button>
+                <button class="btn-sm" @click="openTransfer(decodeURIComponent($el.dataset.name))" data-name="{{ sp.name | urlencode }}">Transfer</button>
                 <button class="btn-sm btn-danger" @click="confirmDelete({{ sp.id }})">Delete</button>
             </span>
         </td>
