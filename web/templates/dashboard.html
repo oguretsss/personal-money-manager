@@ -62,21 +62,145 @@
     {% endfor %}
     </tbody>
 </table>
+{% endif %}
 
+{% else %}
+<p>Unable to load summary data.</p>
+{% endif %}
+
+<!-- ── Analytics: Monthly Trends ─────────────────────────────────────── -->
+
+{% if trends and trends | length > 1 %}
+{% set month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] %}
+
+<h3>Income vs Expenses (Last {{ trends | length }} Months)</h3>
+<div style="max-width: 100%; margin: 0 auto 2rem;">
+    <canvas id="trendsChart"></canvas>
+</div>
+
+<h3>Savings Rate Trend</h3>
+<div style="max-width: 100%; margin: 0 auto 2rem;">
+    <canvas id="savingsRateChart"></canvas>
+</div>
+
+<h3>Spending by User (Last {{ trends | length }} Months)</h3>
+<div style="max-width: 100%; margin: 0 auto 2rem;">
+    <canvas id="userSpendingChart"></canvas>
+</div>
+
+<!-- Monthly Summary Table -->
+<h3>Monthly Summary</h3>
+
+{% set totals = namespace(income=0, expense=0) %}
+{% for t in trends %}
+    {% set totals.income = totals.income + t.income_total %}
+    {% set totals.expense = totals.expense + t.expense_total %}
+{% endfor %}
+{% set avg_income = totals.income / (trends | length) %}
+{% set avg_expense = totals.expense / (trends | length) %}
+
+<div x-data="{ expandedMonth: null }">
+<table class="responsive-table">
+    <thead>
+        <tr>
+            <th>Month</th>
+            <th class="text-right">Income</th>
+            <th class="text-right">Expenses</th>
+            <th class="text-right">Net</th>
+            <th class="text-right">Savings Rate</th>
+            <th class="text-right">vs Avg</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for t in trends | reverse %}
+    {% set net = t.income_total - t.expense_total %}
+    {% set savings_rate = ((net / t.income_total) * 100) if t.income_total > 0 else 0 %}
+    {% set diff_from_avg = t.expense_total - avg_expense %}
+    <tr @click="expandedMonth = expandedMonth === '{{ t.year }}-{{ t.month }}' ? null : '{{ t.year }}-{{ t.month }}'"
+        style="cursor:pointer;">
+        <td data-label="Month">{{ month_names[t.month] }} {{ t.year }}</td>
+        <td data-label="Income" class="amount text-green">${{ "%.2f"|format(t.income_total) }}</td>
+        <td data-label="Expenses" class="amount text-red">${{ "%.2f"|format(t.expense_total) }}</td>
+        <td data-label="Net" class="amount {% if net >= 0 %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(net) }}</td>
+        <td data-label="Savings Rate" class="amount {% if savings_rate >= 0 %}text-green{% else %}text-red{% endif %}">{{ "%.1f"|format(savings_rate) }}%</td>
+        <td data-label="vs Avg" class="amount {% if diff_from_avg <= 0 %}text-green{% else %}text-red{% endif %}">
+            {% if diff_from_avg > 0 %}+{% endif %}${{ "%.2f"|format(diff_from_avg) }}
+        </td>
+    </tr>
+    <!-- Expanded detail row -->
+    <tr x-show="expandedMonth === '{{ t.year }}-{{ t.month }}'" x-cloak>
+        <td colspan="6" style="padding: 0.75rem 1rem; background: rgba(255,255,255,0.03);">
+            {% if t.top_expense_categories %}
+            <strong>Top Expense Categories:</strong>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.5rem;">
+                {% for cat in t.top_expense_categories %}
+                <span style="background:#333;padding:0.25rem 0.6rem;border-radius:4px;font-size:0.85rem;">
+                    {{ cat.category }}: <span class="text-red">${{ "%.2f"|format(cat.total) }}</span>
+                </span>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if t.expense_by_user %}
+            <strong style="display:block;margin-top:0.5rem;">Spending by User:</strong>
+            <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.5rem;">
+                {% for u in t.expense_by_user %}
+                <span style="background:#333;padding:0.25rem 0.6rem;border-radius:4px;font-size:0.85rem;">
+                    {{ u.user }}: <span class="text-red">${{ "%.2f"|format(u.total) }}</span>
+                </span>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if t.to_spaces > 0 or t.from_spaces > 0 %}
+            <strong style="display:block;margin-top:0.5rem;">Space Transfers:</strong>
+            <span style="font-size:0.85rem;">
+                To spaces: ${{ "%.2f"|format(t.to_spaces) }} | From spaces: ${{ "%.2f"|format(t.from_spaces) }}
+            </span>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% endif %}
+
+{% if users %}
+<h3>Users</h3>
+<table class="responsive-table">
+    <thead><tr><th>Name</th><th>Role</th><th>Active</th></tr></thead>
+    <tbody>
+    {% for u in users %}
+    <tr>
+        <td data-label="Name">{{ u.name }}</td>
+        <td data-label="Role">{{ u.role }}</td>
+        <td data-label="Active">{{ "Yes" if u.is_active else "No" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+<!-- ── Charts ────────────────────────────────────────────────────────── -->
+
+{% if summary and summary.by_category %}
+{% set expense_cats = summary.by_category | selectattr("type", "equalto", "expense") | list %}
 {% if expense_cats %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
+var chartColors = [
+    '#e53935','#8e24aa','#3949ab','#039be5','#00897b',
+    '#43a047','#c0ca33','#ffb300','#f4511e','#6d4c41',
+    '#546e7a','#d81b60','#5e35b1','#1e88e5','#00acc1'
+];
+
+// Expense Pie Chart
 new Chart(document.getElementById('expensePie'), {
     type: 'pie',
     data: {
         labels: [{% for e in expense_cats %}"{{ e.category }}"{% if not loop.last %},{% endif %}{% endfor %}],
         datasets: [{
             data: [{% for e in expense_cats %}{{ e.total }}{% if not loop.last %},{% endif %}{% endfor %}],
-            backgroundColor: [
-                '#e53935','#8e24aa','#3949ab','#039be5','#00897b',
-                '#43a047','#c0ca33','#ffb300','#f4511e','#6d4c41',
-                '#546e7a','#d81b60','#5e35b1','#1e88e5','#00acc1'
-            ]
+            backgroundColor: chartColors
         }]
     },
     options: {
@@ -94,27 +218,119 @@ new Chart(document.getElementById('expensePie'), {
         }
     }
 });
+
+{% if trends and trends | length > 1 %}
+// Monthly Trends Bar Chart
+var trendsLabels = [{% for t in trends %}"{{ month_names[t.month] }} {{ t.year }}"{% if not loop.last %},{% endif %}{% endfor %}];
+var trendsIncome = [{% for t in trends %}{{ t.income_total }}{% if not loop.last %},{% endif %}{% endfor %}];
+var trendsExpense = [{% for t in trends %}{{ t.expense_total }}{% if not loop.last %},{% endif %}{% endfor %}];
+
+new Chart(document.getElementById('trendsChart'), {
+    type: 'bar',
+    data: {
+        labels: trendsLabels,
+        datasets: [
+            { label: 'Income', data: trendsIncome, backgroundColor: '#66bb6a' },
+            { label: 'Expenses', data: trendsExpense, backgroundColor: '#ef5350' }
+        ]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { position: 'top' },
+            tooltip: {
+                callbacks: {
+                    label: function(ctx) {
+                        return ctx.dataset.label + ': $' + ctx.parsed.y.toFixed(2);
+                    }
+                }
+            }
+        },
+        scales: {
+            y: { beginAtZero: true, ticks: { callback: function(v) { return '$' + v; } } }
+        }
+    }
+});
+
+// Savings Rate Line Chart
+var savingsRateData = [{% for t in trends %}{% if t.income_total > 0 %}{{ "%.1f"|format(((t.income_total - t.expense_total) / t.income_total) * 100) }}{% else %}0{% endif %}{% if not loop.last %},{% endif %}{% endfor %}];
+
+new Chart(document.getElementById('savingsRateChart'), {
+    type: 'line',
+    data: {
+        labels: trendsLabels,
+        datasets: [{
+            label: 'Savings Rate %',
+            data: savingsRateData,
+            borderColor: '#42a5f5',
+            backgroundColor: 'rgba(66, 165, 245, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 4,
+            pointHoverRadius: 6
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                callbacks: {
+                    label: function(ctx) { return 'Savings rate: ' + ctx.parsed.y.toFixed(1) + '%'; }
+                }
+            }
+        },
+        scales: {
+            y: { ticks: { callback: function(v) { return v + '%'; } } }
+        }
+    }
+});
+
+// Spending by User Stacked Bar Chart
+{% set all_users = [] %}
+{% for t in trends %}
+    {% for u in t.expense_by_user %}
+        {% if u.user not in all_users %}
+            {% if all_users.append(u.user) %}{% endif %}
+        {% endif %}
+    {% endfor %}
+{% endfor %}
+
+var userNames = [{% for name in all_users %}"{{ name }}"{% if not loop.last %},{% endif %}{% endfor %}];
+var userDatasets = userNames.map(function(name, idx) {
+    return {
+        label: name,
+        data: [{% for t in trends %}
+            (function() {
+                var found = [{% for u in t.expense_by_user %}{% raw %}{{% endraw %}"user":"{{ u.user }}","total":{{ u.total }}{% raw %}}{% endraw %}{% if not loop.last %},{% endif %}{% endfor %}].find(function(u) { return u.user === name; });
+                return found ? found.total : 0;
+            })(){% if not loop.last %},{% endif %}
+        {% endfor %}],
+        backgroundColor: chartColors[idx % chartColors.length]
+    };
+});
+
+new Chart(document.getElementById('userSpendingChart'), {
+    type: 'bar',
+    data: { labels: trendsLabels, datasets: userDatasets },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { position: 'top' },
+            tooltip: {
+                callbacks: {
+                    label: function(ctx) { return ctx.dataset.label + ': $' + ctx.parsed.y.toFixed(2); }
+                }
+            }
+        },
+        scales: {
+            x: { stacked: true },
+            y: { stacked: true, beginAtZero: true, ticks: { callback: function(v) { return '$' + v; } } }
+        }
+    }
+});
+{% endif %}
 </script>
 {% endif %}
-{% endif %}
-
-{% else %}
-<p>Unable to load summary data.</p>
-{% endif %}
-
-{% if users %}
-<h3>Users</h3>
-<table class="responsive-table">
-    <thead><tr><th>Name</th><th>Role</th><th>Active</th></tr></thead>
-    <tbody>
-    {% for u in users %}
-    <tr>
-        <td data-label="Name">{{ u.name }}</td>
-        <td data-label="Role">{{ u.role }}</td>
-        <td data-label="Active">{{ "Yes" if u.is_active else "No" }}</td>
-    </tr>
-    {% endfor %}
-    </tbody>
-</table>
 {% endif %}
 {% endblock %}

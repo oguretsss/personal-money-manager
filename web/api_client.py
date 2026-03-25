@@ -73,6 +73,11 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def get_monthly_trends(self, months: int = 12) -> list:
+        r = self._client.get("/admin/analytics/monthly-trends", params={"months": months})
+        r.raise_for_status()
+        return r.json()
+
     def list_users(self) -> list:
         r = self._client.get("/admin/users-list")
         r.raise_for_status()

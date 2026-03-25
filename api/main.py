@@ -697,3 +697,78 @@ def admin_summary(start: datetime | None = None, end: datetime | None = None,
         "spaces": space_items,
         "by_category": items,
     }
+
+
+@app.get("/admin/analytics/monthly-trends", dependencies=[Depends(require_admin)])
+def admin_monthly_trends(months: int = 12, session: Session = Depends(get_session)):
+    now = datetime.utcnow()
+    cats = {c.id: c for c in session.exec(select(Category)).all()}
+    users_map = {u.telegram_id: u.name for u in session.exec(select(User)).all()}
+
+    result = []
+    for i in range(months - 1, -1, -1):
+        # Calculate month offset
+        y = now.year
+        m = now.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+
+        start = datetime(y, m, 1)
+        if m == 12:
+            end = datetime(y + 1, 1, 1)
+        else:
+            end = datetime(y, m + 1, 1)
+
+        txs = session.exec(
+            select(Transaction).where(
+                Transaction.happened_at >= start,
+                Transaction.happened_at < end,
+            )
+        ).all()
+
+        income_c = 0
+        expense_c = 0
+        expense_by_cat: dict[str, int] = {}
+        expense_by_user: dict[int, int] = {}
+        for tx in txs:
+            if tx.type == "income":
+                income_c += tx.amount_cents
+            else:
+                expense_c += tx.amount_cents
+                cat = cats.get(tx.category_id)
+                cat_name = cat.name if cat else "Unknown"
+                expense_by_cat[cat_name] = expense_by_cat.get(cat_name, 0) + tx.amount_cents
+                expense_by_user[tx.created_by_telegram_id] = (
+                    expense_by_user.get(tx.created_by_telegram_id, 0) + tx.amount_cents
+                )
+
+        transfers = session.exec(
+            select(SpaceTransfer).where(
+                SpaceTransfer.happened_at >= start,
+                SpaceTransfer.happened_at < end,
+            )
+        ).all()
+        to_spaces_c = sum(t.amount_cents for t in transfers if t.direction == "to_space")
+        from_spaces_c = sum(t.amount_cents for t in transfers if t.direction == "from_space")
+
+        top_cats = sorted(expense_by_cat.items(), key=lambda x: x[1], reverse=True)[:5]
+        top_users = sorted(expense_by_user.items(), key=lambda x: x[1], reverse=True)
+
+        result.append({
+            "year": y,
+            "month": m,
+            "income_total": income_c / 100.0,
+            "expense_total": expense_c / 100.0,
+            "to_spaces": to_spaces_c / 100.0,
+            "from_spaces": from_spaces_c / 100.0,
+            "top_expense_categories": [
+                {"category": name, "total": cents / 100.0} for name, cents in top_cats
+            ],
+            "expense_by_user": [
+                {"user": users_map.get(tid, str(tid)), "total": cents / 100.0}
+                for tid, cents in top_users
+            ],
+        })
+
+    return result

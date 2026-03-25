@@ -111,6 +111,7 @@ uvicorn main:app --host 0.0.0.0 --port 8002 --reload
 - `DELETE /admin/spaces/{space_id}` - Delete (fails if has transfers)
 - `GET /admin/users-list` - List all users
 - `GET /admin/summary` - Summary without telegram_id requirement
+- `GET /admin/analytics/monthly-trends?months=N` - Monthly income/expenses/savings/categories/user-spending for last N months
 
 ### Bot Commands (bot/bot.py)
 
@@ -124,7 +125,7 @@ Main menu: Expense, Income, Spaces, Summary. Quick entry: sending just a number 
 
 **Pages:**
 - Login — username/password auth
-- Dashboard — income/expense totals, cash balance, spaces, expense pie chart by category (responsive)
+- Dashboard — income/expense totals, cash balance, spaces, expense pie chart, monthly trends (income vs expenses bar chart, savings rate line chart, spending by user stacked bars), expandable month-by-month summary table with trends vs average
 - Transactions — paginated table with type/category filters, reactive add/edit/delete via modals
 - Categories — table with inline rename, reactive delete with confirmation
 - Spaces — table with inline rename, reactive delete with confirmation

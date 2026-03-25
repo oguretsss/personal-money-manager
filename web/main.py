@@ -77,10 +77,15 @@ def dashboard(request: Request, _user: str = Depends(require_login)):
     except httpx.HTTPError:
         summary = None
         users = []
+    try:
+        trends = api.get_monthly_trends(12)
+    except httpx.HTTPError:
+        trends = []
     return templates.TemplateResponse("dashboard.html", {
         "request": request,
         "summary": summary,
         "users": users,
+        "trends": trends,
         "messages": get_flashed_messages(request),
     })
 
@@ -262,6 +267,14 @@ def delete_space(space_id: int, request: Request, _user: str = Depends(require_l
 def _error_json(e: httpx.HTTPStatusError) -> JSONResponse:
     detail = e.response.json().get("detail", str(e))
     return JSONResponse({"error": detail}, status_code=e.response.status_code)
+
+
+@app.get("/api/analytics/monthly-trends")
+def api_monthly_trends(_user: str = Depends(require_login), months: int = 12):
+    try:
+        return api.get_monthly_trends(months)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
 
 
 @app.get("/api/summary")
