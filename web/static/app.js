@@ -4,6 +4,11 @@ function todayDate() {
     return new Date().toISOString().slice(0, 10);
 }
 
+function parseAmount(value) {
+    if (typeof value === 'number') return value;
+    return parseFloat(String(value).replace(',', '.'));
+}
+
 async function apiCall(method, url, body) {
     const opts = {
         method,
@@ -103,7 +108,7 @@ function fabExpense() {
             this.loading = true;
             const payload = {
                 type: this.form.type,
-                amount: parseFloat(this.form.amount),
+                amount: parseAmount(this.form.amount),
                 category_name: this.form.category_name,
                 created_by_telegram_id: parseInt(this.form.created_by_telegram_id),
                 note: this.form.note || '',
@@ -182,7 +187,7 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
             this.loading = true;
             const payload = {
                 type: this.addForm.type,
-                amount: parseFloat(this.addForm.amount),
+                amount: parseAmount(this.addForm.amount),
                 category_name: this.addForm.category_name,
                 created_by_telegram_id: parseInt(this.addForm.created_by_telegram_id),
                 note: this.addForm.note || '',
@@ -214,7 +219,7 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
         async submitEdit() {
             this.loading = true;
             const payload = {
-                amount: parseFloat(this.editForm.amount),
+                amount: parseAmount(this.editForm.amount),
                 category_name: this.editForm.category_name,
                 note: this.editForm.note || '',
             };
