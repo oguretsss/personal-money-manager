@@ -37,8 +37,7 @@
 <button @click="openAdd()" style="margin-bottom: 1.5rem;">+ Add Transaction</button>
 
 <!-- Add Transaction Modal -->
-<template x-if="showAdd">
-    <div class="modal-overlay" @click.self="showAdd = false">
+<div x-show="showAdd" x-cloak class="modal-overlay" @click.self="showAdd = false">
         <div class="modal-content">
             <h3>Add Transaction</h3>
             <div class="grid-2">
@@ -91,11 +90,10 @@
             </div>
         </div>
     </div>
-</template>
+</div>
 
 <!-- Edit Transaction Modal -->
-<template x-if="showEdit">
-    <div class="modal-overlay" @click.self="showEdit = false">
+<div x-show="showEdit" x-cloak class="modal-overlay" @click.self="showEdit = false">
         <div class="modal-content">
             <h3>Edit Transaction</h3>
             <div class="grid-2">
@@ -126,11 +124,10 @@
             </div>
         </div>
     </div>
-</template>
+</div>
 
 <!-- Delete Confirmation -->
-<template x-if="showConfirm">
-    <div class="confirm-overlay" @click.self="showConfirm = false">
+<div x-show="showConfirm" x-cloak class="confirm-overlay" @click.self="showConfirm = false">
         <div class="confirm-box">
             <p>Delete this transaction?</p>
             <div class="confirm-actions">
@@ -140,7 +137,7 @@
             </div>
         </div>
     </div>
-</template>
+</div>
 
 <!-- Transactions Table -->
 <table class="responsive-table">

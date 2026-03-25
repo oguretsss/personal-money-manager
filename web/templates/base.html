@@ -44,8 +44,7 @@
     <div x-data="fabExpense()" x-cloak>
         <button class="fab" @click="openModal()" title="Quick expense">+</button>
 
-        <template x-if="showModal">
-            <div class="fab-overlay" @click.self="showModal = false">
+        <div x-show="showModal" x-cloak class="fab-overlay" @click.self="showModal = false">
                 <div class="fab-modal">
                     <h3>Quick Expense</h3>
                     <div class="form-row">
@@ -96,7 +95,7 @@
                     </div>
                 </div>
             </div>
-        </template>
+        </div>
     </div>
 </body>
 </html>
