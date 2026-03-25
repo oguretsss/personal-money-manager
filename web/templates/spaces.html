@@ -2,7 +2,8 @@
 {% set active = "spaces" %}
 {% block title %}Spaces - MoneyManage Admin{% endblock %}
 {% block content %}
-<div x-data="spacesPage({{ spaces | tojson }})">
+<script id="sp-init-data" type="application/json">{{ spaces | tojson }}</script>
+<div x-data="spacesPage(JSON.parse(document.getElementById('sp-init-data').textContent))">
 <h2>Spaces</h2>
 
 <!-- Delete Confirmation -->

@@ -2,7 +2,8 @@
 {% set active = "categories" %}
 {% block title %}Categories - MoneyManage Admin{% endblock %}
 {% block content %}
-<div x-data="categoriesPage({{ categories | tojson }})">
+<script id="cat-init-data" type="application/json">{{ categories | tojson }}</script>
+<div x-data="categoriesPage(JSON.parse(document.getElementById('cat-init-data').textContent))">
 <h2>Categories</h2>
 
 <!-- Delete Confirmation -->

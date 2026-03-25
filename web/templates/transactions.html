@@ -2,7 +2,8 @@
 {% set active = "transactions" %}
 {% block title %}Transactions - MoneyManage Admin{% endblock %}
 {% block content %}
-<div x-data="transactionsPage({{ data | tojson }}, {{ categories | tojson }}, {{ users | tojson }})">
+<script id="tx-init-data" type="application/json">{{ {"data": data, "categories": categories, "users": users} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('tx-init-data').textContent); return transactionsPage(d.data, d.categories, d.users); })()">
 <h2>Transactions</h2>
 
 <!-- Filters -->
