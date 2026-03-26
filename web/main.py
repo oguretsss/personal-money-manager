@@ -1,7 +1,9 @@
+import csv
+import io
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Form, Depends, Body
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
@@ -98,10 +100,17 @@ def transactions_page(
     _user: str = Depends(require_login),
     type: str | None = None,
     category: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
     page: int = 1,
 ):
+    params: dict = dict(type=type, category=category, page=page, per_page=50)
+    if start:
+        params["start"] = start + "T00:00:00"
+    if end:
+        params["end"] = end + "T23:59:59"
     try:
-        data = api.list_transactions(type=type, category=category, page=page, per_page=50)
+        data = api.list_transactions(**params)
         categories = api.list_categories()
         users = api.list_users()
     except httpx.HTTPError:
@@ -115,6 +124,8 @@ def transactions_page(
         "users": users,
         "filter_type": type,
         "filter_category": category,
+        "filter_start": start,
+        "filter_end": end,
         "messages": get_flashed_messages(request),
     })
 
@@ -172,6 +183,43 @@ def edit_transaction(
         detail = e.response.json().get("detail", str(e))
         flash(request, f"Error: {detail}", "error")
     return RedirectResponse("/transactions", status_code=303)
+
+
+@app.get("/transactions/export")
+def export_transactions_csv(
+    request: Request,
+    _user: str = Depends(require_login),
+    type: str | None = None,
+    category: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+):
+    params: dict = dict(type=type, category=category, page=1, per_page=10000)
+    if start:
+        params["start"] = start + "T00:00:00"
+    if end:
+        params["end"] = end + "T23:59:59"
+    try:
+        data = api.list_transactions(**params)
+    except httpx.HTTPError:
+        data = {"items": []}
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Date", "Type", "Category", "Amount", "Note"])
+    for tx in data["items"]:
+        writer.writerow([
+            tx["happened_at"][:10],
+            tx["type"],
+            tx["category"],
+            f'{tx["amount"]:.2f}',
+            tx.get("note", ""),
+        ])
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=transactions.csv"},
+    )
 
 
 @app.post("/transactions/{tx_id}/delete")
@@ -331,6 +379,14 @@ def api_list_categories(_user: str = Depends(require_login)):
         return _error_json(e)
 
 
+@app.post("/api/categories")
+def api_create_category(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_category(data.get("name", ""), data.get("type", ""))
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
 @app.post("/api/categories/{cat_id}/rename")
 def api_rename_category(cat_id: int, _user: str = Depends(require_login), data: dict = Body()):
     try:
@@ -351,6 +407,14 @@ def api_delete_category(cat_id: int, _user: str = Depends(require_login)):
 def api_list_spaces(_user: str = Depends(require_login)):
     try:
         return api.list_spaces()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/spaces")
+def api_create_space(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_space(data.get("name", ""))
     except httpx.HTTPStatusError as e:
         return _error_json(e)
 

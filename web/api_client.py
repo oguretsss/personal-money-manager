@@ -43,6 +43,11 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def create_category(self, name: str, type: str) -> dict:
+        r = self._client.post("/admin/categories", params={"name": name, "type": type})
+        r.raise_for_status()
+        return r.json()
+
     def rename_category(self, cat_id: int, name: str) -> dict:
         r = self._client.put(f"/admin/categories/{cat_id}", json={"name": name})
         r.raise_for_status()
@@ -55,6 +60,11 @@ class AdminApiClient:
 
     def list_spaces(self) -> list:
         r = self._client.get("/admin/spaces")
+        r.raise_for_status()
+        return r.json()
+
+    def create_space(self, name: str) -> dict:
+        r = self._client.post("/admin/spaces", params={"name": name})
         r.raise_for_status()
         return r.json()
 

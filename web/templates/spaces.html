@@ -6,6 +6,24 @@
 <div x-data="(() => { const d = JSON.parse(document.getElementById('sp-init-data').textContent); return spacesPage(d.spaces, d.users); })()">
 <h2>Spaces</h2>
 
+<button @click="showCreate = true" style="margin-bottom: 1.5rem;">+ New Space</button>
+
+<!-- Create Space Modal -->
+<div x-show="showCreate" x-cloak class="modal-overlay" @click.self="showCreate = false">
+    <div class="modal-content">
+        <h3>New Space</h3>
+        <div class="form-row">
+            <label>Name</label>
+            <input type="text" x-model="createName" placeholder="Space name">
+        </div>
+        <div class="form-actions">
+            <button @click="showCreate = false" class="secondary">Cancel</button>
+            <button @click="submitCreate()" :disabled="loading"
+                    x-text="loading ? 'Creating...' : 'Create Space'"></button>
+        </div>
+    </div>
+</div>
+
 <!-- Delete Confirmation -->
 <div x-show="showConfirm" x-cloak class="confirm-overlay" @click.self="showConfirm = false">
     <div class="confirm-box">

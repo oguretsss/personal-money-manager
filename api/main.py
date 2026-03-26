@@ -545,6 +545,20 @@ def admin_list_categories(session: Session = Depends(get_session)):
     ]
 
 
+@app.post("/admin/categories", dependencies=[Depends(require_admin)])
+def admin_create_category(name: str, type: str, session: Session = Depends(get_session)):
+    if type not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="Invalid type")
+    existing = session.exec(select(Category).where(Category.name == name)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Category with this name already exists")
+    cat = Category(name=name.strip(), type=type)
+    session.add(cat)
+    session.commit()
+    session.refresh(cat)
+    return {"id": cat.id, "name": cat.name, "type": cat.type, "ok": True}
+
+
 @app.put("/admin/categories/{cat_id}", dependencies=[Depends(require_admin)])
 def admin_update_category(cat_id: int, payload: CategoryUpdate, session: Session = Depends(get_session)):
     cat = session.get(Category, cat_id)
@@ -586,6 +600,18 @@ def admin_list_spaces(session: Session = Depends(get_session)):
         from_c = sum(int(s or 0) for d, s in rows if d == "from_space")
         result.append({"id": sp.id, "name": sp.name, "balance": (to_c - from_c) / 100.0})
     return result
+
+
+@app.post("/admin/spaces", dependencies=[Depends(require_admin)])
+def admin_create_space(name: str, session: Session = Depends(get_session)):
+    existing = session.exec(select(Space).where(Space.name == name)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Space with this name already exists")
+    sp = Space(name=name.strip())
+    session.add(sp)
+    session.commit()
+    session.refresh(sp)
+    return {"id": sp.id, "name": sp.name, "ok": True}
 
 
 @app.put("/admin/spaces/{space_id}", dependencies=[Depends(require_admin)])

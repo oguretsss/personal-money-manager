@@ -262,6 +262,8 @@ function categoriesPage(initialCategories) {
         editName: '',
         showConfirm: false,
         confirmId: null,
+        showCreate: false,
+        createForm: { name: '', type: 'expense' },
         loading: false,
 
         startRename(cat) {
@@ -286,6 +288,26 @@ function categoriesPage(initialCategories) {
             if (result) {
                 Alpine.store('toast').add('Category renamed', 'success');
                 this.editId = null;
+                Alpine.store('app').invalidate();
+                window.location.reload();
+            }
+        },
+
+        async submitCreate() {
+            if (!this.createForm.name.trim()) {
+                Alpine.store('toast').add('Please enter a category name', 'error');
+                return;
+            }
+            this.loading = true;
+            const result = await apiCall('POST', '/api/categories', {
+                name: this.createForm.name.trim(),
+                type: this.createForm.type,
+            });
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add('Category created', 'success');
+                this.showCreate = false;
+                this.createForm = { name: '', type: 'expense' };
                 Alpine.store('app').invalidate();
                 window.location.reload();
             }
@@ -320,6 +342,8 @@ function spacesPage(initialSpaces, initialUsers) {
         editName: '',
         showConfirm: false,
         confirmId: null,
+        showCreate: false,
+        createName: '',
         showTransfer: false,
         transferForm: {
             space_name: '',
@@ -330,6 +354,23 @@ function spacesPage(initialSpaces, initialUsers) {
             note: '',
         },
         loading: false,
+
+        async submitCreate() {
+            if (!this.createName.trim()) {
+                Alpine.store('toast').add('Please enter a space name', 'error');
+                return;
+            }
+            this.loading = true;
+            const result = await apiCall('POST', '/api/spaces', { name: this.createName.trim() });
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add('Space created', 'success');
+                this.showCreate = false;
+                this.createName = '';
+                Alpine.store('app').invalidate();
+                window.location.reload();
+            }
+        },
 
         startRename(space) {
             this.editId = space.id;

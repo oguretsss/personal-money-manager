@@ -7,10 +7,10 @@
 <h2>Transactions</h2>
 
 <!-- Filters -->
-<details class="panel" {% if filter_type or filter_category %}open{% endif %}>
+<details class="panel" {% if filter_type or filter_category or filter_start or filter_end %}open{% endif %}>
     <summary>Filter</summary>
     <form method="get" action="/transactions">
-        <div class="grid">
+        <div class="grid-2">
             <label>
                 Type
                 <select name="type">
@@ -29,7 +29,22 @@
                 </select>
             </label>
         </div>
-        <button type="submit">Apply</button>
+        <div class="grid-2">
+            <label>
+                From
+                <input type="date" name="start" value="{{ filter_start or '' }}">
+            </label>
+            <label>
+                To
+                <input type="date" name="end" value="{{ filter_end or '' }}">
+            </label>
+        </div>
+        <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
+            <button type="submit">Apply</button>
+            <a href="/transactions" class="secondary" role="button" style="text-decoration:none;">Clear</a>
+            <a href="/transactions/export?{% if filter_type %}type={{ filter_type }}&{% endif %}{% if filter_category %}category={{ filter_category }}&{% endif %}{% if filter_start %}start={{ filter_start }}&{% endif %}{% if filter_end %}end={{ filter_end }}{% endif %}"
+               role="button" class="secondary" style="text-decoration:none;">Export CSV</a>
+        </div>
     </form>
 </details>
 
@@ -102,7 +117,12 @@
             </div>
             <div class="form-row">
                 <label>Category</label>
-                <input type="text" x-model="editForm.category_name">
+                <select x-model="editForm.category_name">
+                    <option value="">Select...</option>
+                    <template x-for="c in categories" :key="c.id">
+                        <option :value="c.name" x-text="c.name + ' (' + c.type + ')'" :selected="c.name === editForm.category_name"></option>
+                    </template>
+                </select>
             </div>
         </div>
         <div class="grid-2">
@@ -174,7 +194,7 @@
     <ul>
         {% for p in range(1, total_pages + 1) %}
         <li>
-            <a href="/transactions?page={{ p }}{% if filter_type %}&type={{ filter_type }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}"
+            <a href="/transactions?page={{ p }}{% if filter_type %}&type={{ filter_type }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_start %}&start={{ filter_start }}{% endif %}{% if filter_end %}&end={{ filter_end }}{% endif %}"
                {% if p == data.page %}aria-current="page"{% endif %}>{{ p }}</a>
         </li>
         {% endfor %}
