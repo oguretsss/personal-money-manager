@@ -22,7 +22,8 @@ from schemas import (
     SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
     CategoryUpdate, SpaceUpdate,
     InvestmentAssetCreate, InvestmentTradeCreate,
-    InvestmentCashEventCreate, InvestmentPriceCreate,
+    InvestmentTradeUpdate, InvestmentCashEventCreate,
+    InvestmentCashEventUpdate, InvestmentPriceCreate,
 )
 from auth import require_admin
 
@@ -210,6 +211,7 @@ def build_investment_state(session: Session) -> dict:
             "id": trade.id,
             "happened_at": trade.happened_at.isoformat(),
             "type": trade.side,
+            "account_id": trade.account_id,
             "asset_id": asset.id,
             "asset_name": asset.name,
             "asset_type": asset.asset_type,
@@ -223,6 +225,7 @@ def build_investment_state(session: Session) -> dict:
             "cash_impact": cash_impact_c / 100.0,
             "realized_pnl": realized_pnl_c / 100.0,
             "note": trade.note,
+            "created_by_telegram_id": trade.created_by_telegram_id,
         })
 
     for event in cash_events:
@@ -242,6 +245,7 @@ def build_investment_state(session: Session) -> dict:
             "id": event.id,
             "happened_at": event.happened_at.isoformat(),
             "type": event.event_type,
+            "account_id": event.account_id,
             "asset_id": asset.id if asset else None,
             "asset_name": asset.name if asset else "",
             "asset_type": asset.asset_type if asset else "",
@@ -255,6 +259,7 @@ def build_investment_state(session: Session) -> dict:
             "cash_impact": cash_impact_c / 100.0,
             "realized_pnl": None,
             "note": event.note,
+            "created_by_telegram_id": event.created_by_telegram_id,
         })
 
     holdings = []
@@ -393,6 +398,47 @@ def summarize_month_investments(session: Session, start: datetime, end: datetime
         "investment_income_total": income_total_c / 100.0,
         "investment_fee_total": fee_total_c / 100.0,
     }
+
+
+def ensure_trade_sequence_valid(
+    session: Session,
+    candidate_trade: InvestmentTrade | None = None,
+    replace_trade_id: int | None = None,
+    delete_trade_id: int | None = None,
+) -> None:
+    assets_map = {asset.id: asset for asset in session.exec(select(InvestmentAsset)).all()}
+    trades = session.exec(
+        select(InvestmentTrade).order_by(InvestmentTrade.happened_at, InvestmentTrade.id)
+    ).all()
+
+    effective_trades: list[InvestmentTrade] = []
+    for trade in trades:
+        if delete_trade_id is not None and trade.id == delete_trade_id:
+            continue
+        if replace_trade_id is not None and trade.id == replace_trade_id:
+            continue
+        effective_trades.append(trade)
+
+    if candidate_trade is not None:
+        effective_trades.append(candidate_trade)
+
+    effective_trades.sort(key=lambda item: (item.happened_at, item.id or 0))
+
+    positions: dict[int, int] = defaultdict(int)
+    for trade in effective_trades:
+        if trade.side == "buy":
+            positions[trade.asset_id] += trade.quantity_micros
+            continue
+
+        if trade.quantity_micros > positions[trade.asset_id]:
+            asset = assets_map.get(trade.asset_id)
+            asset_name = asset.name if asset else str(trade.asset_id)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Operation would make holdings negative for {asset_name}",
+            )
+
+        positions[trade.asset_id] -= trade.quantity_micros
 
 @app.get("/health")
 def health():
@@ -1076,12 +1122,6 @@ def admin_create_investment_trade(payload: InvestmentTradeCreate, session: Sessi
     if quantity_micros <= 0:
         raise HTTPException(status_code=400, detail="Quantity must be greater than zero")
 
-    if side == "sell":
-        holdings = {item["asset_id"]: item for item in build_investment_state(session)["holdings"]}
-        available_quantity = holdings.get(payload.asset_id, {}).get("quantity", 0.0)
-        if payload.quantity > available_quantity + 1e-9:
-            raise HTTPException(status_code=400, detail="Not enough quantity to sell")
-
     trade = InvestmentTrade(
         account_id=payload.account_id,
         asset_id=payload.asset_id,
@@ -1094,10 +1134,77 @@ def admin_create_investment_trade(payload: InvestmentTradeCreate, session: Sessi
         note=payload.note or "",
         created_by_telegram_id=payload.created_by_telegram_id,
     )
+    ensure_trade_sequence_valid(session, candidate_trade=trade)
     session.add(trade)
     session.commit()
     session.refresh(trade)
     return {"id": trade.id, "ok": True}
+
+
+@app.put("/admin/investments/trades/{trade_id}", dependencies=[Depends(require_admin)])
+def admin_update_investment_trade(
+    trade_id: int,
+    payload: InvestmentTradeUpdate,
+    session: Session = Depends(get_session),
+):
+    trade = session.get(InvestmentTrade, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Investment trade not found")
+
+    side = payload.side.strip().lower()
+    if side not in INVESTMENT_TRADE_SIDES:
+        raise HTTPException(status_code=400, detail="Invalid trade side")
+
+    account = session.get(InvestmentAccount, payload.account_id)
+    if not account or not account.is_active:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+
+    asset = session.get(InvestmentAsset, payload.asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Investment asset not found")
+
+    candidate_trade = InvestmentTrade(
+        id=trade.id,
+        account_id=payload.account_id,
+        asset_id=payload.asset_id,
+        side=side,
+        quantity_micros=quantity_to_micros(payload.quantity),
+        unit_price_cents=amount_to_cents(payload.unit_price),
+        fees_cents=amount_to_cents(payload.fees),
+        taxes_cents=amount_to_cents(payload.taxes),
+        happened_at=payload.happened_at,
+        note=payload.note or "",
+        created_by_telegram_id=payload.created_by_telegram_id,
+    )
+    if candidate_trade.quantity_micros <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be greater than zero")
+    ensure_trade_sequence_valid(session, candidate_trade=candidate_trade, replace_trade_id=trade_id)
+
+    trade.account_id = payload.account_id
+    trade.asset_id = payload.asset_id
+    trade.side = side
+    trade.quantity_micros = candidate_trade.quantity_micros
+    trade.unit_price_cents = candidate_trade.unit_price_cents
+    trade.fees_cents = candidate_trade.fees_cents
+    trade.taxes_cents = candidate_trade.taxes_cents
+    trade.happened_at = payload.happened_at
+    trade.note = payload.note or ""
+    trade.created_by_telegram_id = payload.created_by_telegram_id
+    session.add(trade)
+    session.commit()
+    return {"ok": True}
+
+
+@app.delete("/admin/investments/trades/{trade_id}", dependencies=[Depends(require_admin)])
+def admin_delete_investment_trade(trade_id: int, session: Session = Depends(get_session)):
+    trade = session.get(InvestmentTrade, trade_id)
+    if not trade:
+        raise HTTPException(status_code=404, detail="Investment trade not found")
+
+    ensure_trade_sequence_valid(session, delete_trade_id=trade_id)
+    session.delete(trade)
+    session.commit()
+    return {"ok": True}
 
 
 @app.post("/admin/investments/cash-events", dependencies=[Depends(require_admin)])
@@ -1130,6 +1237,52 @@ def admin_create_investment_cash_event(payload: InvestmentCashEventCreate, sessi
     session.commit()
     session.refresh(event)
     return {"id": event.id, "ok": True}
+
+
+@app.put("/admin/investments/cash-events/{event_id}", dependencies=[Depends(require_admin)])
+def admin_update_investment_cash_event(
+    event_id: int,
+    payload: InvestmentCashEventUpdate,
+    session: Session = Depends(get_session),
+):
+    event = session.get(InvestmentCashEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Investment cash event not found")
+
+    event_type = payload.event_type.strip().lower()
+    if event_type not in INVESTMENT_CASH_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid cash event type")
+
+    account = session.get(InvestmentAccount, payload.account_id)
+    if not account or not account.is_active:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+
+    if payload.asset_id is not None and not session.get(InvestmentAsset, payload.asset_id):
+        raise HTTPException(status_code=404, detail="Investment asset not found")
+
+    if event_type in {"dividend", "coupon"} and payload.asset_id is None:
+        raise HTTPException(status_code=400, detail="Asset is required for dividends and coupons")
+
+    event.account_id = payload.account_id
+    event.asset_id = payload.asset_id
+    event.event_type = event_type
+    event.amount_cents = amount_to_cents(payload.amount)
+    event.happened_at = payload.happened_at
+    event.note = payload.note or ""
+    event.created_by_telegram_id = payload.created_by_telegram_id
+    session.add(event)
+    session.commit()
+    return {"ok": True}
+
+
+@app.delete("/admin/investments/cash-events/{event_id}", dependencies=[Depends(require_admin)])
+def admin_delete_investment_cash_event(event_id: int, session: Session = Depends(get_session)):
+    event = session.get(InvestmentCashEvent, event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail="Investment cash event not found")
+    session.delete(event)
+    session.commit()
+    return {"ok": True}
 
 
 @app.post("/admin/investments/prices", dependencies=[Depends(require_admin)])

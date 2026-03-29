@@ -530,10 +530,42 @@ def api_create_investment_trade(_user: str = Depends(require_login), data: dict 
         return _error_json(e)
 
 
+@app.put("/api/investments/trades/{trade_id}")
+def api_update_investment_trade(trade_id: int, _user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.update_investment_trade(trade_id, data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/investments/trades/{trade_id}")
+def api_delete_investment_trade(trade_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.delete_investment_trade(trade_id)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
 @app.post("/api/investments/cash-events")
 def api_create_investment_cash_event(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_investment_cash_event(data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.put("/api/investments/cash-events/{event_id}")
+def api_update_investment_cash_event(event_id: int, _user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.update_investment_cash_event(event_id, data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/investments/cash-events/{event_id}")
+def api_delete_investment_cash_event(event_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.delete_investment_cash_event(event_id)
     except httpx.HTTPStatusError as e:
         return _error_json(e)
 

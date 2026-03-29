@@ -94,12 +94,35 @@ class InvestmentTradeCreate(BaseModel):
     created_by_telegram_id: int
 
 
+class InvestmentTradeUpdate(BaseModel):
+    account_id: int
+    asset_id: int
+    side: str
+    quantity: float = Field(gt=0)
+    unit_price: float = Field(gt=0)
+    fees: float = Field(default=0, ge=0)
+    taxes: float = Field(default=0, ge=0)
+    happened_at: datetime
+    note: str = ""
+    created_by_telegram_id: int
+
+
 class InvestmentCashEventCreate(BaseModel):
     account_id: int
     asset_id: int | None = None
     event_type: str
     amount: float = Field(gt=0)
     happened_at: datetime | None = None
+    note: str = ""
+    created_by_telegram_id: int
+
+
+class InvestmentCashEventUpdate(BaseModel):
+    account_id: int
+    asset_id: int | None = None
+    event_type: str
+    amount: float = Field(gt=0)
+    happened_at: datetime
     note: str = ""
     created_by_telegram_id: int
 

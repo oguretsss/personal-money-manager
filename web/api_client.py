@@ -128,8 +128,28 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def update_investment_trade(self, trade_id: int, data: dict) -> dict:
+        r = self._client.put(f"/admin/investments/trades/{trade_id}", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def delete_investment_trade(self, trade_id: int) -> dict:
+        r = self._client.delete(f"/admin/investments/trades/{trade_id}")
+        r.raise_for_status()
+        return r.json()
+
     def create_investment_cash_event(self, data: dict) -> dict:
         r = self._client.post("/admin/investments/cash-events", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def update_investment_cash_event(self, event_id: int, data: dict) -> dict:
+        r = self._client.put(f"/admin/investments/cash-events/{event_id}", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def delete_investment_cash_event(self, event_id: int) -> dict:
+        r = self._client.delete(f"/admin/investments/cash-events/{event_id}")
         r.raise_for_status()
         return r.json()
 

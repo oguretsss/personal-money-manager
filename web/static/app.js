@@ -470,6 +470,10 @@ function investmentsPage(initialAccounts, initialAssets, initialUsers) {
         showTrade: false,
         showCashEvent: false,
         showPrice: false,
+        showDeleteOperation: false,
+        deleteOperation: null,
+        editTradeId: null,
+        editCashEventId: null,
 
         assetForm: {
             name: '',
@@ -536,6 +540,7 @@ function investmentsPage(initialAccounts, initialAssets, initialUsers) {
         },
 
         openTrade(side) {
+            this.editTradeId = null;
             this.tradeForm.side = side;
             this.tradeForm.asset_id = '';
             this.tradeForm.quantity = '';
@@ -544,15 +549,28 @@ function investmentsPage(initialAccounts, initialAssets, initialUsers) {
             this.tradeForm.taxes = '';
             this.tradeForm.happened_at = todayDate();
             this.tradeForm.note = '';
+            if (this.accounts.length && !this.tradeForm.account_id) {
+                this.tradeForm.account_id = this.accounts[0].id;
+            }
+            if (this.users.length && !this.tradeForm.created_by_telegram_id) {
+                this.tradeForm.created_by_telegram_id = this.users[0].telegram_id;
+            }
             this.showTrade = true;
         },
 
         openCashEvent(type) {
+            this.editCashEventId = null;
             this.cashEventForm.event_type = type || 'dividend';
             this.cashEventForm.asset_id = '';
             this.cashEventForm.amount = '';
             this.cashEventForm.happened_at = todayDate();
             this.cashEventForm.note = '';
+            if (this.accounts.length && !this.cashEventForm.account_id) {
+                this.cashEventForm.account_id = this.accounts[0].id;
+            }
+            if (this.users.length && !this.cashEventForm.created_by_telegram_id) {
+                this.cashEventForm.created_by_telegram_id = this.users[0].telegram_id;
+            }
             this.showCashEvent = true;
         },
 
@@ -587,6 +605,42 @@ function investmentsPage(initialAccounts, initialAssets, initialUsers) {
             }
         },
 
+        openEditTrade(op) {
+            this.editTradeId = op.id;
+            this.tradeForm = {
+                account_id: op.account_id,
+                asset_id: op.asset_id,
+                side: op.type,
+                quantity: op.quantity,
+                unit_price: op.unit_price,
+                fees: op.fees,
+                taxes: op.taxes,
+                happened_at: op.happened_at ? op.happened_at.slice(0, 10) : todayDate(),
+                note: op.note || '',
+                created_by_telegram_id: op.created_by_telegram_id,
+            };
+            this.showTrade = true;
+        },
+
+        openEditCashEvent(op) {
+            this.editCashEventId = op.id;
+            this.cashEventForm = {
+                account_id: op.account_id,
+                asset_id: op.asset_id || '',
+                event_type: op.type,
+                amount: op.gross_amount,
+                happened_at: op.happened_at ? op.happened_at.slice(0, 10) : todayDate(),
+                note: op.note || '',
+                created_by_telegram_id: op.created_by_telegram_id,
+            };
+            this.showCashEvent = true;
+        },
+
+        confirmDeleteOperation(op) {
+            this.deleteOperation = op;
+            this.showDeleteOperation = true;
+        },
+
         async submitTrade() {
             if (!this.tradeForm.asset_id || !this.tradeForm.quantity || !this.tradeForm.unit_price) {
                 Alpine.store('toast').add('Please fill asset, quantity and unit price', 'error');
@@ -607,11 +661,15 @@ function investmentsPage(initialAccounts, initialAssets, initialUsers) {
             if (this.tradeForm.happened_at) {
                 payload.happened_at = this.tradeForm.happened_at + 'T00:00:00';
             }
-            const result = await apiCall('POST', '/api/investments/trades', payload);
+            const method = this.editTradeId ? 'PUT' : 'POST';
+            const url = this.editTradeId ? `/api/investments/trades/${this.editTradeId}` : '/api/investments/trades';
+            const result = await apiCall(method, url, payload);
             this.loading = false;
             if (result) {
-                Alpine.store('toast').add(this.tradeForm.side === 'buy' ? 'Buy recorded' : 'Sell recorded', 'success');
+                const action = this.editTradeId ? 'Trade updated' : (this.tradeForm.side === 'buy' ? 'Buy recorded' : 'Sell recorded');
+                Alpine.store('toast').add(action, 'success');
                 this.showTrade = false;
+                this.editTradeId = null;
                 window.location.reload();
             }
         },
@@ -635,11 +693,14 @@ function investmentsPage(initialAccounts, initialAssets, initialUsers) {
             if (this.cashEventForm.happened_at) {
                 payload.happened_at = this.cashEventForm.happened_at + 'T00:00:00';
             }
-            const result = await apiCall('POST', '/api/investments/cash-events', payload);
+            const method = this.editCashEventId ? 'PUT' : 'POST';
+            const url = this.editCashEventId ? `/api/investments/cash-events/${this.editCashEventId}` : '/api/investments/cash-events';
+            const result = await apiCall(method, url, payload);
             this.loading = false;
             if (result) {
-                Alpine.store('toast').add('Cash event recorded', 'success');
+                Alpine.store('toast').add(this.editCashEventId ? 'Cash event updated' : 'Cash event recorded', 'success');
                 this.showCashEvent = false;
+                this.editCashEventId = null;
                 window.location.reload();
             }
         },
@@ -662,6 +723,23 @@ function investmentsPage(initialAccounts, initialAssets, initialUsers) {
             if (result) {
                 Alpine.store('toast').add('Price updated', 'success');
                 this.showPrice = false;
+                window.location.reload();
+            }
+        },
+
+        async doDeleteOperation() {
+            if (!this.deleteOperation) return;
+            this.loading = true;
+            const isTrade = this.deleteOperation.kind === 'trade';
+            const url = isTrade
+                ? `/api/investments/trades/${this.deleteOperation.id}`
+                : `/api/investments/cash-events/${this.deleteOperation.id}`;
+            const result = await apiCall('DELETE', url);
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add(isTrade ? 'Trade deleted' : 'Cash event deleted', 'success');
+                this.showDeleteOperation = false;
+                this.deleteOperation = null;
                 window.location.reload();
             }
         },

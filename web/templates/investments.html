@@ -113,6 +113,7 @@
             <th class="text-right">Cash Impact</th>
             <th class="text-right">Realized P/L</th>
             <th>Note</th>
+            <th>Actions</th>
         </tr>
     </thead>
     <tbody>
@@ -149,10 +150,20 @@
             {% endif %}
         </td>
         <td data-label="Note">{{ op.note or "" }}</td>
+        <td class="actions-cell">
+            <span style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                {% if op.kind == "trade" %}
+                <button class="btn-sm" @click="openEditTrade(JSON.parse(decodeURIComponent($el.dataset.op)))" data-op="{{ op | tojson | urlencode }}">Edit</button>
+                {% else %}
+                <button class="btn-sm" @click="openEditCashEvent(JSON.parse(decodeURIComponent($el.dataset.op)))" data-op="{{ op | tojson | urlencode }}">Edit</button>
+                {% endif %}
+                <button class="btn-sm btn-danger" @click="confirmDeleteOperation(JSON.parse(decodeURIComponent($el.dataset.op)))" data-op="{{ op | tojson | urlencode }}">Delete</button>
+            </span>
+        </td>
     </tr>
     {% endfor %}
     {% if not operations %}
-    <tr><td colspan="7">No investment operations found.</td></tr>
+    <tr><td colspan="8">No investment operations found.</td></tr>
     {% endif %}
     </tbody>
 </table>
@@ -208,7 +219,7 @@
 
 <div x-show="showTrade" x-cloak class="modal-overlay" @click.self="showTrade = false">
     <div class="modal-content">
-        <h3 x-text="tradeForm.side === 'buy' ? 'Record Buy' : 'Record Sell'"></h3>
+        <h3 x-text="editTradeId ? 'Edit Trade' : (tradeForm.side === 'buy' ? 'Record Buy' : 'Record Sell')"></h3>
         <div class="grid-2">
             <div class="form-row">
                 <label>Account</label>
@@ -269,14 +280,14 @@
         <div class="form-actions">
             <button @click="showTrade = false" class="secondary">Cancel</button>
             <button @click="submitTrade()" :disabled="loading"
-                    x-text="loading ? 'Saving...' : (tradeForm.side === 'buy' ? 'Record Buy' : 'Record Sell')"></button>
+                    x-text="loading ? 'Saving...' : (editTradeId ? 'Save Trade' : (tradeForm.side === 'buy' ? 'Record Buy' : 'Record Sell'))"></button>
         </div>
     </div>
 </div>
 
 <div x-show="showCashEvent" x-cloak class="modal-overlay" @click.self="showCashEvent = false">
     <div class="modal-content">
-        <h3>Record Cash Event</h3>
+        <h3 x-text="editCashEventId ? 'Edit Cash Event' : 'Record Cash Event'"></h3>
         <div class="grid-2">
             <div class="form-row">
                 <label>Type</label>
@@ -332,7 +343,7 @@
         <div class="form-actions">
             <button @click="showCashEvent = false" class="secondary">Cancel</button>
             <button @click="submitCashEvent()" :disabled="loading"
-                    x-text="loading ? 'Saving...' : 'Record Cash Event'"></button>
+                    x-text="loading ? 'Saving...' : (editCashEventId ? 'Save Cash Event' : 'Record Cash Event')"></button>
         </div>
     </div>
 </div>
@@ -363,6 +374,17 @@
             <button @click="showPrice = false" class="secondary">Cancel</button>
             <button @click="submitPrice()" :disabled="loading"
                     x-text="loading ? 'Saving...' : 'Save Price'"></button>
+        </div>
+    </div>
+</div>
+
+<div x-show="showDeleteOperation" x-cloak class="confirm-overlay" @click.self="showDeleteOperation = false">
+    <div class="confirm-box">
+        <p x-text="deleteOperation && deleteOperation.kind === 'trade' ? 'Delete this trade?' : 'Delete this cash event?'"></p>
+        <div class="confirm-actions">
+            <button @click="showDeleteOperation = false" class="secondary">Cancel</button>
+            <button @click="doDeleteOperation()" :disabled="loading" class="btn-danger"
+                    x-text="loading ? 'Deleting...' : 'Delete'"></button>
         </div>
     </div>
 </div>
