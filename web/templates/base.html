@@ -19,6 +19,7 @@
         <ul class="nav-links" :class="{ 'open': navOpen }" @click="navOpen = false">
             <li><a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
             <li><a href="/transactions" class="{% if active == 'transactions' %}active{% endif %}">Transactions</a></li>
+            <li><a href="/investments" class="{% if active == 'investments' %}active{% endif %}">Investments</a></li>
             <li><a href="/categories" class="{% if active == 'categories' %}active{% endif %}">Categories</a></li>
             <li><a href="/spaces" class="{% if active == 'spaces' %}active{% endif %}">Spaces</a></li>
             <li><a href="/logout">Logout</a></li>
@@ -96,6 +97,5 @@
                 </div>
             </div>
         </div>
-    </div>
 </body>
 </html>

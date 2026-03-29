@@ -92,3 +92,48 @@ class AdminApiClient:
         r = self._client.get("/admin/users-list")
         r.raise_for_status()
         return r.json()
+
+    def list_investment_accounts(self) -> list:
+        r = self._client.get("/admin/investments/accounts")
+        r.raise_for_status()
+        return r.json()
+
+    def list_investment_assets(self) -> list:
+        r = self._client.get("/admin/investments/assets")
+        r.raise_for_status()
+        return r.json()
+
+    def create_investment_asset(self, data: dict) -> dict:
+        r = self._client.post("/admin/investments/assets", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def list_investment_holdings(self) -> list:
+        r = self._client.get("/admin/investments/holdings")
+        r.raise_for_status()
+        return r.json()
+
+    def list_investment_operations(self) -> list:
+        r = self._client.get("/admin/investments/operations")
+        r.raise_for_status()
+        return r.json()
+
+    def get_investment_summary(self) -> dict:
+        r = self._client.get("/admin/investments/summary")
+        r.raise_for_status()
+        return r.json()
+
+    def create_investment_trade(self, data: dict) -> dict:
+        r = self._client.post("/admin/investments/trades", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def create_investment_cash_event(self, data: dict) -> dict:
+        r = self._client.post("/admin/investments/cash-events", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def create_investment_price(self, data: dict) -> dict:
+        r = self._client.post("/admin/investments/prices", json=data)
+        r.raise_for_status()
+        return r.json()

@@ -456,3 +456,214 @@ function spacesPage(initialSpaces, initialUsers) {
         },
     };
 }
+
+/* -- Investments page component ------------------------------------------ */
+
+function investmentsPage(initialAccounts, initialAssets, initialUsers) {
+    return {
+        accounts: initialAccounts || [],
+        assets: initialAssets || [],
+        users: initialUsers || [],
+        loading: false,
+
+        showAssetCreate: false,
+        showTrade: false,
+        showCashEvent: false,
+        showPrice: false,
+
+        assetForm: {
+            name: '',
+            asset_type: 'etf',
+            isin: '',
+            wkn: '',
+            ticker: '',
+            currency_code: 'EUR',
+            note: '',
+        },
+
+        tradeForm: {
+            account_id: '',
+            asset_id: '',
+            side: 'buy',
+            quantity: '',
+            unit_price: '',
+            fees: '',
+            taxes: '',
+            happened_at: todayDate(),
+            note: '',
+            created_by_telegram_id: '',
+        },
+
+        cashEventForm: {
+            account_id: '',
+            asset_id: '',
+            event_type: 'dividend',
+            amount: '',
+            happened_at: todayDate(),
+            note: '',
+            created_by_telegram_id: '',
+        },
+
+        priceForm: {
+            asset_id: '',
+            price: '',
+            priced_at: todayDate(),
+        },
+
+        init() {
+            const defaultAccount = this.accounts[0];
+            const defaultUser = this.users[0];
+            if (defaultAccount) {
+                this.tradeForm.account_id = defaultAccount.id;
+                this.cashEventForm.account_id = defaultAccount.id;
+            }
+            if (defaultUser) {
+                this.tradeForm.created_by_telegram_id = defaultUser.telegram_id;
+                this.cashEventForm.created_by_telegram_id = defaultUser.telegram_id;
+            }
+        },
+
+        resetAssetForm() {
+            this.assetForm = {
+                name: '',
+                asset_type: 'etf',
+                isin: '',
+                wkn: '',
+                ticker: '',
+                currency_code: 'EUR',
+                note: '',
+            };
+        },
+
+        openTrade(side) {
+            this.tradeForm.side = side;
+            this.tradeForm.asset_id = '';
+            this.tradeForm.quantity = '';
+            this.tradeForm.unit_price = '';
+            this.tradeForm.fees = '';
+            this.tradeForm.taxes = '';
+            this.tradeForm.happened_at = todayDate();
+            this.tradeForm.note = '';
+            this.showTrade = true;
+        },
+
+        openCashEvent(type) {
+            this.cashEventForm.event_type = type || 'dividend';
+            this.cashEventForm.asset_id = '';
+            this.cashEventForm.amount = '';
+            this.cashEventForm.happened_at = todayDate();
+            this.cashEventForm.note = '';
+            this.showCashEvent = true;
+        },
+
+        openPriceModal() {
+            this.priceForm.asset_id = '';
+            this.priceForm.price = '';
+            this.priceForm.priced_at = todayDate();
+            this.showPrice = true;
+        },
+
+        async submitAsset() {
+            if (!this.assetForm.name.trim() || !this.assetForm.isin.trim()) {
+                Alpine.store('toast').add('Please fill asset name and ISIN', 'error');
+                return;
+            }
+            this.loading = true;
+            const result = await apiCall('POST', '/api/investments/assets', {
+                name: this.assetForm.name.trim(),
+                asset_type: this.assetForm.asset_type,
+                isin: this.assetForm.isin.trim(),
+                wkn: this.assetForm.wkn.trim(),
+                ticker: this.assetForm.ticker.trim(),
+                currency_code: (this.assetForm.currency_code || 'EUR').trim(),
+                note: this.assetForm.note || '',
+            });
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add('Asset created', 'success');
+                this.showAssetCreate = false;
+                this.resetAssetForm();
+                window.location.reload();
+            }
+        },
+
+        async submitTrade() {
+            if (!this.tradeForm.asset_id || !this.tradeForm.quantity || !this.tradeForm.unit_price) {
+                Alpine.store('toast').add('Please fill asset, quantity and unit price', 'error');
+                return;
+            }
+            this.loading = true;
+            const payload = {
+                account_id: parseInt(this.tradeForm.account_id),
+                asset_id: parseInt(this.tradeForm.asset_id),
+                side: this.tradeForm.side,
+                quantity: parseAmount(this.tradeForm.quantity),
+                unit_price: parseAmount(this.tradeForm.unit_price),
+                fees: this.tradeForm.fees ? parseAmount(this.tradeForm.fees) : 0,
+                taxes: this.tradeForm.taxes ? parseAmount(this.tradeForm.taxes) : 0,
+                created_by_telegram_id: parseInt(this.tradeForm.created_by_telegram_id),
+                note: this.tradeForm.note || '',
+            };
+            if (this.tradeForm.happened_at) {
+                payload.happened_at = this.tradeForm.happened_at + 'T00:00:00';
+            }
+            const result = await apiCall('POST', '/api/investments/trades', payload);
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add(this.tradeForm.side === 'buy' ? 'Buy recorded' : 'Sell recorded', 'success');
+                this.showTrade = false;
+                window.location.reload();
+            }
+        },
+
+        async submitCashEvent() {
+            if (!this.cashEventForm.amount) {
+                Alpine.store('toast').add('Please fill the amount', 'error');
+                return;
+            }
+            this.loading = true;
+            const payload = {
+                account_id: parseInt(this.cashEventForm.account_id),
+                event_type: this.cashEventForm.event_type,
+                amount: parseAmount(this.cashEventForm.amount),
+                created_by_telegram_id: parseInt(this.cashEventForm.created_by_telegram_id),
+                note: this.cashEventForm.note || '',
+            };
+            if (this.cashEventForm.asset_id) {
+                payload.asset_id = parseInt(this.cashEventForm.asset_id);
+            }
+            if (this.cashEventForm.happened_at) {
+                payload.happened_at = this.cashEventForm.happened_at + 'T00:00:00';
+            }
+            const result = await apiCall('POST', '/api/investments/cash-events', payload);
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add('Cash event recorded', 'success');
+                this.showCashEvent = false;
+                window.location.reload();
+            }
+        },
+
+        async submitPrice() {
+            if (!this.priceForm.asset_id || !this.priceForm.price) {
+                Alpine.store('toast').add('Please fill asset and price', 'error');
+                return;
+            }
+            this.loading = true;
+            const payload = {
+                asset_id: parseInt(this.priceForm.asset_id),
+                price: parseAmount(this.priceForm.price),
+            };
+            if (this.priceForm.priced_at) {
+                payload.priced_at = this.priceForm.priced_at + 'T00:00:00';
+            }
+            const result = await apiCall('POST', '/api/investments/prices', payload);
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add('Price updated', 'success');
+                this.showPrice = false;
+                window.location.reload();
+            }
+        },
+    };
+}

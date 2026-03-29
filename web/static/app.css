@@ -258,6 +258,38 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 
 [x-cloak] { display: none !important; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+
+.badge-muted {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 999px;
+    background: #37474f;
+    color: #cfd8dc;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.op-pill {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: #37474f;
+    color: #eceff1;
+}
+
+.op-buy { background: #1b5e20; color: #c8e6c9; }
+.op-sell { background: #0d47a1; color: #bbdefb; }
+.op-dividend, .op-coupon { background: #33691e; color: #dcedc8; }
+.op-fee, .op-tax { background: #b71c1c; color: #ffcdd2; }
+
+@media (max-width: 768px) {
+    .grid-2 { grid-template-columns: 1fr; }
+}
 @media (max-width: 768px) {
     .grid-2 { grid-template-columns: 1fr; }
 }

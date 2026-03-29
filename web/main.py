@@ -288,6 +288,34 @@ def spaces_page(request: Request, _user: str = Depends(require_login)):
     })
 
 
+@app.get("/investments", response_class=HTMLResponse)
+def investments_page(request: Request, _user: str = Depends(require_login)):
+    try:
+        accounts = api.list_investment_accounts()
+        assets = api.list_investment_assets()
+        holdings = api.list_investment_holdings()
+        operations = api.list_investment_operations()
+        summary = api.get_investment_summary()
+        users = api.list_users()
+    except httpx.HTTPError:
+        accounts = []
+        assets = []
+        holdings = []
+        operations = []
+        summary = {}
+        users = []
+    return templates.TemplateResponse("investments.html", {
+        "request": request,
+        "accounts": accounts,
+        "assets": assets,
+        "holdings": holdings,
+        "operations": operations,
+        "summary": summary,
+        "users": users,
+        "messages": get_flashed_messages(request),
+    })
+
+
 @app.post("/spaces/{space_id}/rename")
 def rename_space(space_id: int, request: Request, _user: str = Depends(require_login), name: str = Form()):
     try:
@@ -442,6 +470,78 @@ def api_space_transfer(_user: str = Depends(require_login), data: dict = Body())
         return JSONResponse({"error": "User is required"}, status_code=400)
     try:
         return api.space_transfer(int(telegram_id), data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/investments/accounts")
+def api_list_investment_accounts(_user: str = Depends(require_login)):
+    try:
+        return api.list_investment_accounts()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/investments/assets")
+def api_list_investment_assets(_user: str = Depends(require_login)):
+    try:
+        return api.list_investment_assets()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/investments/holdings")
+def api_list_investment_holdings(_user: str = Depends(require_login)):
+    try:
+        return api.list_investment_holdings()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/investments/operations")
+def api_list_investment_operations(_user: str = Depends(require_login)):
+    try:
+        return api.list_investment_operations()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.get("/api/investments/summary")
+def api_investment_summary(_user: str = Depends(require_login)):
+    try:
+        return api.get_investment_summary()
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/investments/assets")
+def api_create_investment_asset(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_investment_asset(data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/investments/trades")
+def api_create_investment_trade(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_investment_trade(data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/investments/cash-events")
+def api_create_investment_cash_event(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_investment_cash_event(data)
+    except httpx.HTTPStatusError as e:
+        return _error_json(e)
+
+
+@app.post("/api/investments/prices")
+def api_create_investment_price(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_investment_price(data)
     except httpx.HTTPStatusError as e:
         return _error_json(e)
 

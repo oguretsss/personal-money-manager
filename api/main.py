@@ -1,18 +1,39 @@
+from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException
 from sqlmodel import Session, select, func
 from datetime import datetime, timedelta
 import os
 
 from db import init_db, get_session
-from models import User, Category, Transaction,Space, SpaceTransfer
+from models import (
+    User,
+    Category,
+    Transaction,
+    Space,
+    SpaceTransfer,
+    InvestmentAccount,
+    InvestmentAsset,
+    InvestmentTrade,
+    InvestmentCashEvent,
+    InvestmentPriceSnapshot,
+)
 from schemas import (
     TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem,
     SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
     CategoryUpdate, SpaceUpdate,
+    InvestmentAssetCreate, InvestmentTradeCreate,
+    InvestmentCashEventCreate, InvestmentPriceCreate,
 )
 from auth import require_admin
 
 app = FastAPI(title="Family Budget API")
+
+QUANTITY_SCALE = 1_000_000
+DEFAULT_INVESTMENT_ACCOUNT_NAME = "MaxBlue"
+DEFAULT_INVESTMENT_ACCOUNT_BROKER = "Deutsche Bank MaxBlue"
+INVESTMENT_ASSET_TYPES = {"stock", "etf", "bond"}
+INVESTMENT_TRADE_SIDES = {"buy", "sell"}
+INVESTMENT_CASH_EVENT_TYPES = {"dividend", "coupon", "fee", "tax"}
 
 @app.on_event("startup")
 def on_startup():
@@ -36,6 +57,342 @@ def get_or_create_category(session: Session, name: str, tx_type: str) -> Categor
     session.commit()
     session.refresh(cat)
     return cat
+
+
+def amount_to_cents(value: float) -> int:
+    return int(round(value * 100))
+
+
+def quantity_to_micros(value: float) -> int:
+    return int(round(value * QUANTITY_SCALE))
+
+
+def micros_to_quantity(value: int) -> float:
+    return value / QUANTITY_SCALE
+
+
+def micros_price_to_cents(quantity_micros: int, unit_price_cents: int) -> int:
+    return int(round((quantity_micros * unit_price_cents) / QUANTITY_SCALE))
+
+
+def ensure_default_investment_account(session: Session) -> InvestmentAccount:
+    account = session.exec(select(InvestmentAccount).order_by(InvestmentAccount.id)).first()
+    if account:
+        return account
+
+    account = InvestmentAccount(
+        name=DEFAULT_INVESTMENT_ACCOUNT_NAME,
+        broker=DEFAULT_INVESTMENT_ACCOUNT_BROKER,
+        currency_code="EUR",
+    )
+    session.add(account)
+    session.commit()
+    session.refresh(account)
+    return account
+
+
+def list_investment_accounts(session: Session) -> list[InvestmentAccount]:
+    ensure_default_investment_account(session)
+    return session.exec(select(InvestmentAccount).order_by(InvestmentAccount.name)).all()
+
+
+def list_space_balances(session: Session) -> tuple[int, list[dict]]:
+    spaces = session.exec(select(Space)).all()
+    spaces_total_c = 0
+    space_items = []
+
+    for sp in spaces:
+        rows = session.exec(
+            select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+            .where(SpaceTransfer.space_id == sp.id)
+            .group_by(SpaceTransfer.direction)
+        ).all()
+
+        to_c = sum(int(s or 0) for d, s in rows if d == "to_space")
+        from_c = sum(int(s or 0) for d, s in rows if d == "from_space")
+        bal_c = to_c - from_c
+        spaces_total_c += bal_c
+        space_items.append({"space": sp.name, "balance": bal_c / 100.0})
+
+    return spaces_total_c, space_items
+
+
+def calculate_base_cash_balance_c(session: Session) -> int:
+    all_txs = session.exec(select(Transaction)).all()
+    all_income_c = sum(tx.amount_cents for tx in all_txs if tx.type == "income")
+    all_expense_c = sum(tx.amount_cents for tx in all_txs if tx.type == "expense")
+
+    all_transfers = session.exec(
+        select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
+        .group_by(SpaceTransfer.direction)
+    ).all()
+    all_to_space_c = sum(int(s or 0) for d, s in all_transfers if d == "to_space")
+    all_from_space_c = sum(int(s or 0) for d, s in all_transfers if d == "from_space")
+
+    return (all_income_c - all_expense_c) - all_to_space_c + all_from_space_c
+
+
+def build_investment_state(session: Session) -> dict:
+    accounts = list_investment_accounts(session)
+    assets = session.exec(select(InvestmentAsset).order_by(InvestmentAsset.name)).all()
+    assets_map = {asset.id: asset for asset in assets}
+    accounts_map = {account.id: account for account in accounts}
+
+    price_rows = session.exec(
+        select(InvestmentPriceSnapshot)
+        .order_by(InvestmentPriceSnapshot.asset_id, InvestmentPriceSnapshot.priced_at.desc(), InvestmentPriceSnapshot.id.desc())
+    ).all()
+    latest_prices: dict[int, InvestmentPriceSnapshot] = {}
+    for row in price_rows:
+        if row.asset_id not in latest_prices:
+            latest_prices[row.asset_id] = row
+
+    trades = session.exec(
+        select(InvestmentTrade).order_by(InvestmentTrade.happened_at, InvestmentTrade.id)
+    ).all()
+    cash_events = session.exec(
+        select(InvestmentCashEvent).order_by(InvestmentCashEvent.happened_at, InvestmentCashEvent.id)
+    ).all()
+
+    holdings_state: dict[int, dict] = defaultdict(lambda: {
+        "quantity_micros": 0,
+        "cost_basis_cents": 0,
+        "realized_pnl_cents": 0,
+        "account_ids": set(),
+    })
+    operations: list[dict] = []
+
+    trade_fees_c = 0
+    cash_events_income_c = 0
+    cash_events_fee_c = 0
+    net_cash_delta_c = 0
+
+    for trade in trades:
+        asset = assets_map.get(trade.asset_id)
+        if not asset:
+            continue
+
+        state = holdings_state[trade.asset_id]
+        state["account_ids"].add(trade.account_id)
+
+        quantity_micros = trade.quantity_micros
+        gross_cents = micros_price_to_cents(quantity_micros, trade.unit_price_cents)
+        total_fees_c = trade.fees_cents + trade.taxes_cents
+        trade_fees_c += total_fees_c
+        realized_pnl_c = 0
+
+        if trade.side == "buy":
+            total_cost_c = gross_cents + total_fees_c
+            state["quantity_micros"] += quantity_micros
+            state["cost_basis_cents"] += total_cost_c
+            cash_impact_c = -total_cost_c
+        else:
+            if quantity_micros > state["quantity_micros"]:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Investment ledger is inconsistent for asset {asset.name}: sell quantity exceeds holdings",
+                )
+
+            cost_basis_before = state["cost_basis_cents"]
+            quantity_before = state["quantity_micros"]
+            cost_portion_c = int(round((cost_basis_before * quantity_micros) / quantity_before)) if quantity_before else 0
+            net_proceeds_c = gross_cents - total_fees_c
+            realized_pnl_c = net_proceeds_c - cost_portion_c
+            state["quantity_micros"] -= quantity_micros
+            state["cost_basis_cents"] -= cost_portion_c
+            state["realized_pnl_cents"] += realized_pnl_c
+            cash_impact_c = net_proceeds_c
+
+        net_cash_delta_c += cash_impact_c
+        account = accounts_map.get(trade.account_id)
+        operations.append({
+            "kind": "trade",
+            "id": trade.id,
+            "happened_at": trade.happened_at.isoformat(),
+            "type": trade.side,
+            "asset_id": asset.id,
+            "asset_name": asset.name,
+            "asset_type": asset.asset_type,
+            "isin": asset.isin,
+            "account_name": account.name if account else "",
+            "quantity": micros_to_quantity(quantity_micros),
+            "unit_price": trade.unit_price_cents / 100.0,
+            "gross_amount": gross_cents / 100.0,
+            "fees": trade.fees_cents / 100.0,
+            "taxes": trade.taxes_cents / 100.0,
+            "cash_impact": cash_impact_c / 100.0,
+            "realized_pnl": realized_pnl_c / 100.0,
+            "note": trade.note,
+        })
+
+    for event in cash_events:
+        account = accounts_map.get(event.account_id)
+        asset = assets_map.get(event.asset_id) if event.asset_id else None
+
+        if event.event_type in {"dividend", "coupon"}:
+            cash_impact_c = event.amount_cents
+            cash_events_income_c += event.amount_cents
+        else:
+            cash_impact_c = -event.amount_cents
+            cash_events_fee_c += event.amount_cents
+
+        net_cash_delta_c += cash_impact_c
+        operations.append({
+            "kind": "cash_event",
+            "id": event.id,
+            "happened_at": event.happened_at.isoformat(),
+            "type": event.event_type,
+            "asset_id": asset.id if asset else None,
+            "asset_name": asset.name if asset else "",
+            "asset_type": asset.asset_type if asset else "",
+            "isin": asset.isin if asset else "",
+            "account_name": account.name if account else "",
+            "quantity": None,
+            "unit_price": None,
+            "gross_amount": event.amount_cents / 100.0,
+            "fees": 0.0,
+            "taxes": 0.0,
+            "cash_impact": cash_impact_c / 100.0,
+            "realized_pnl": None,
+            "note": event.note,
+        })
+
+    holdings = []
+    market_value_total_c = 0
+    cost_basis_total_c = 0
+    realized_pnl_total_c = 0
+
+    for asset in assets:
+        state = holdings_state.get(asset.id)
+        if not state or state["quantity_micros"] <= 0:
+            continue
+
+        quantity_micros = state["quantity_micros"]
+        cost_basis_c = state["cost_basis_cents"]
+        latest_price = latest_prices.get(asset.id)
+        if latest_price:
+            latest_price_c = latest_price.price_cents
+            market_value_c = micros_price_to_cents(quantity_micros, latest_price_c)
+            price_date = latest_price.priced_at.isoformat()
+            has_price = True
+        else:
+            latest_price_c = int(round((cost_basis_c * QUANTITY_SCALE) / quantity_micros)) if quantity_micros else 0
+            market_value_c = cost_basis_c
+            price_date = None
+            has_price = False
+
+        unrealized_pnl_c = market_value_c - cost_basis_c
+        market_value_total_c += market_value_c
+        cost_basis_total_c += cost_basis_c
+        realized_pnl_total_c += state["realized_pnl_cents"]
+
+        account_names = sorted(accounts_map[acc_id].name for acc_id in state["account_ids"] if acc_id in accounts_map)
+        holdings.append({
+            "asset_id": asset.id,
+            "asset_name": asset.name,
+            "asset_type": asset.asset_type,
+            "isin": asset.isin,
+            "wkn": asset.wkn,
+            "ticker": asset.ticker,
+            "currency_code": asset.currency_code,
+            "account_names": account_names,
+            "quantity": micros_to_quantity(quantity_micros),
+            "average_cost": (cost_basis_c / 100.0) / micros_to_quantity(quantity_micros) if quantity_micros else 0.0,
+            "cost_basis": cost_basis_c / 100.0,
+            "latest_price": latest_price_c / 100.0,
+            "market_value": market_value_c / 100.0,
+            "unrealized_pnl": unrealized_pnl_c / 100.0,
+            "realized_pnl": state["realized_pnl_cents"] / 100.0,
+            "price_date": price_date,
+            "has_price": has_price,
+        })
+
+    holdings.sort(key=lambda item: item["market_value"], reverse=True)
+    operations.sort(key=lambda item: (item["happened_at"], item["id"]), reverse=True)
+
+    return {
+        "accounts": [
+            {
+                "id": account.id,
+                "name": account.name,
+                "broker": account.broker,
+                "currency_code": account.currency_code,
+                "is_active": account.is_active,
+            }
+            for account in accounts
+        ],
+        "assets": [
+            {
+                "id": asset.id,
+                "isin": asset.isin,
+                "wkn": asset.wkn,
+                "ticker": asset.ticker,
+                "name": asset.name,
+                "asset_type": asset.asset_type,
+                "currency_code": asset.currency_code,
+                "note": asset.note,
+                "latest_price": (latest_prices[asset.id].price_cents / 100.0) if asset.id in latest_prices else None,
+                "price_date": latest_prices[asset.id].priced_at.isoformat() if asset.id in latest_prices else None,
+            }
+            for asset in assets
+        ],
+        "holdings": holdings,
+        "operations": operations,
+        "summary": {
+            "investments_market_value": market_value_total_c / 100.0,
+            "investments_cost_basis": cost_basis_total_c / 100.0,
+            "investments_unrealized_pnl": (market_value_total_c - cost_basis_total_c) / 100.0,
+            "investments_realized_pnl": realized_pnl_total_c / 100.0,
+            "investment_income_total": cash_events_income_c / 100.0,
+            "investment_fee_total": (trade_fees_c + cash_events_fee_c) / 100.0,
+            "investment_positions_count": len(holdings),
+            "investment_assets_count": len(assets),
+            "investment_cash_delta": net_cash_delta_c / 100.0,
+        },
+    }
+
+
+def summarize_month_investments(session: Session, start: datetime, end: datetime) -> dict:
+    trades = session.exec(
+        select(InvestmentTrade).where(
+            InvestmentTrade.happened_at >= start,
+            InvestmentTrade.happened_at < end,
+        )
+    ).all()
+    cash_events = session.exec(
+        select(InvestmentCashEvent).where(
+            InvestmentCashEvent.happened_at >= start,
+            InvestmentCashEvent.happened_at < end,
+        )
+    ).all()
+
+    buy_total_c = 0
+    sell_total_c = 0
+    fee_total_c = 0
+    income_total_c = 0
+
+    for trade in trades:
+        gross_cents = micros_price_to_cents(trade.quantity_micros, trade.unit_price_cents)
+        total_fees_c = trade.fees_cents + trade.taxes_cents
+        fee_total_c += total_fees_c
+        net_cents = gross_cents + total_fees_c if trade.side == "buy" else gross_cents - total_fees_c
+        if trade.side == "buy":
+            buy_total_c += net_cents
+        else:
+            sell_total_c += net_cents
+
+    for event in cash_events:
+        if event.event_type in {"dividend", "coupon"}:
+            income_total_c += event.amount_cents
+        else:
+            fee_total_c += event.amount_cents
+
+    return {
+        "investment_buy_total": buy_total_c / 100.0,
+        "investment_sell_total": sell_total_c / 100.0,
+        "investment_income_total": income_total_c / 100.0,
+        "investment_fee_total": fee_total_c / 100.0,
+    }
 
 @app.get("/health")
 def health():
@@ -650,6 +1007,149 @@ def admin_list_users(session: Session = Depends(get_session)):
     ]
 
 
+@app.get("/admin/investments/accounts", dependencies=[Depends(require_admin)])
+def admin_list_investment_accounts(session: Session = Depends(get_session)):
+    return build_investment_state(session)["accounts"]
+
+
+@app.get("/admin/investments/assets", dependencies=[Depends(require_admin)])
+def admin_list_investment_assets(session: Session = Depends(get_session)):
+    return build_investment_state(session)["assets"]
+
+
+@app.post("/admin/investments/assets", dependencies=[Depends(require_admin)])
+def admin_create_investment_asset(payload: InvestmentAssetCreate, session: Session = Depends(get_session)):
+    asset_type = payload.asset_type.strip().lower()
+    if asset_type not in INVESTMENT_ASSET_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid asset type")
+
+    isin = payload.isin.strip().upper()
+    if session.exec(select(InvestmentAsset).where(InvestmentAsset.isin == isin)).first():
+        raise HTTPException(status_code=400, detail="Asset with this ISIN already exists")
+
+    asset = InvestmentAsset(
+        isin=isin,
+        wkn=payload.wkn.strip().upper(),
+        ticker=payload.ticker.strip().upper(),
+        name=payload.name.strip(),
+        asset_type=asset_type,
+        currency_code=payload.currency_code.strip().upper(),
+        note=payload.note or "",
+    )
+    session.add(asset)
+    session.commit()
+    session.refresh(asset)
+    return {"id": asset.id, "ok": True}
+
+
+@app.get("/admin/investments/holdings", dependencies=[Depends(require_admin)])
+def admin_list_investment_holdings(session: Session = Depends(get_session)):
+    return build_investment_state(session)["holdings"]
+
+
+@app.get("/admin/investments/operations", dependencies=[Depends(require_admin)])
+def admin_list_investment_operations(session: Session = Depends(get_session)):
+    return build_investment_state(session)["operations"]
+
+
+@app.get("/admin/investments/summary", dependencies=[Depends(require_admin)])
+def admin_investment_summary(session: Session = Depends(get_session)):
+    return build_investment_state(session)["summary"]
+
+
+@app.post("/admin/investments/trades", dependencies=[Depends(require_admin)])
+def admin_create_investment_trade(payload: InvestmentTradeCreate, session: Session = Depends(get_session)):
+    side = payload.side.strip().lower()
+    if side not in INVESTMENT_TRADE_SIDES:
+        raise HTTPException(status_code=400, detail="Invalid trade side")
+
+    ensure_default_investment_account(session)
+    account = session.get(InvestmentAccount, payload.account_id)
+    if not account or not account.is_active:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+
+    asset = session.get(InvestmentAsset, payload.asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Investment asset not found")
+
+    quantity_micros = quantity_to_micros(payload.quantity)
+    if quantity_micros <= 0:
+        raise HTTPException(status_code=400, detail="Quantity must be greater than zero")
+
+    if side == "sell":
+        holdings = {item["asset_id"]: item for item in build_investment_state(session)["holdings"]}
+        available_quantity = holdings.get(payload.asset_id, {}).get("quantity", 0.0)
+        if payload.quantity > available_quantity + 1e-9:
+            raise HTTPException(status_code=400, detail="Not enough quantity to sell")
+
+    trade = InvestmentTrade(
+        account_id=payload.account_id,
+        asset_id=payload.asset_id,
+        side=side,
+        quantity_micros=quantity_micros,
+        unit_price_cents=amount_to_cents(payload.unit_price),
+        fees_cents=amount_to_cents(payload.fees),
+        taxes_cents=amount_to_cents(payload.taxes),
+        happened_at=payload.happened_at or datetime.utcnow(),
+        note=payload.note or "",
+        created_by_telegram_id=payload.created_by_telegram_id,
+    )
+    session.add(trade)
+    session.commit()
+    session.refresh(trade)
+    return {"id": trade.id, "ok": True}
+
+
+@app.post("/admin/investments/cash-events", dependencies=[Depends(require_admin)])
+def admin_create_investment_cash_event(payload: InvestmentCashEventCreate, session: Session = Depends(get_session)):
+    event_type = payload.event_type.strip().lower()
+    if event_type not in INVESTMENT_CASH_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail="Invalid cash event type")
+
+    ensure_default_investment_account(session)
+    account = session.get(InvestmentAccount, payload.account_id)
+    if not account or not account.is_active:
+        raise HTTPException(status_code=404, detail="Investment account not found")
+
+    if payload.asset_id is not None and not session.get(InvestmentAsset, payload.asset_id):
+        raise HTTPException(status_code=404, detail="Investment asset not found")
+
+    if event_type in {"dividend", "coupon"} and payload.asset_id is None:
+        raise HTTPException(status_code=400, detail="Asset is required for dividends and coupons")
+
+    event = InvestmentCashEvent(
+        account_id=payload.account_id,
+        asset_id=payload.asset_id,
+        event_type=event_type,
+        amount_cents=amount_to_cents(payload.amount),
+        happened_at=payload.happened_at or datetime.utcnow(),
+        note=payload.note or "",
+        created_by_telegram_id=payload.created_by_telegram_id,
+    )
+    session.add(event)
+    session.commit()
+    session.refresh(event)
+    return {"id": event.id, "ok": True}
+
+
+@app.post("/admin/investments/prices", dependencies=[Depends(require_admin)])
+def admin_create_investment_price(payload: InvestmentPriceCreate, session: Session = Depends(get_session)):
+    asset = session.get(InvestmentAsset, payload.asset_id)
+    if not asset:
+        raise HTTPException(status_code=404, detail="Investment asset not found")
+
+    snapshot = InvestmentPriceSnapshot(
+        asset_id=payload.asset_id,
+        price_cents=amount_to_cents(payload.price),
+        priced_at=payload.priced_at or datetime.utcnow(),
+        source=(payload.source or "manual").strip(),
+    )
+    session.add(snapshot)
+    session.commit()
+    session.refresh(snapshot)
+    return {"id": snapshot.id, "ok": True}
+
+
 @app.get("/admin/summary", dependencies=[Depends(require_admin)])
 def admin_summary(start: datetime | None = None, end: datetime | None = None,
                   session: Session = Depends(get_session)):
@@ -682,35 +1182,13 @@ def admin_summary(start: datetime | None = None, end: datetime | None = None,
         for k, v in sorted(by_cat_c.items(), key=lambda kv: kv[1], reverse=True)
     ]
 
-    all_txs = session.exec(select(Transaction)).all()
-    all_income_c = sum(tx.amount_cents for tx in all_txs if tx.type == "income")
-    all_expense_c = sum(tx.amount_cents for tx in all_txs if tx.type == "expense")
-
-    all_transfers = session.exec(
-        select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
-        .group_by(SpaceTransfer.direction)
-    ).all()
-    all_to_space_c = sum(int(s or 0) for d, s in all_transfers if d == "to_space")
-    all_from_space_c = sum(int(s or 0) for d, s in all_transfers if d == "from_space")
-
-    cash_balance_c = (all_income_c - all_expense_c) - all_to_space_c + all_from_space_c
-
-    spaces = session.exec(select(Space)).all()
-    spaces_total_c = 0
-    space_items = []
-    for sp in spaces:
-        r2 = session.exec(
-            select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
-            .where(SpaceTransfer.space_id == sp.id)
-            .group_by(SpaceTransfer.direction)
-        ).all()
-        to_c = sum(int(s or 0) for d, s in r2 if d == "to_space")
-        from_c = sum(int(s or 0) for d, s in r2 if d == "from_space")
-        bal_c = to_c - from_c
-        spaces_total_c += bal_c
-        space_items.append({"space": sp.name, "balance": bal_c / 100.0})
-
-    total_assets_c = cash_balance_c + spaces_total_c
+    base_cash_balance_c = calculate_base_cash_balance_c(session)
+    spaces_total_c, space_items = list_space_balances(session)
+    investment_state = build_investment_state(session)
+    investment_summary = investment_state["summary"]
+    investments_market_value_c = amount_to_cents(investment_summary["investments_market_value"])
+    cash_balance_c = base_cash_balance_c + amount_to_cents(investment_summary["investment_cash_delta"])
+    total_assets_c = cash_balance_c + spaces_total_c + investments_market_value_c
 
     return {
         "start": start.isoformat(),
@@ -719,9 +1197,18 @@ def admin_summary(start: datetime | None = None, end: datetime | None = None,
         "expense_total": expense_total_c / 100.0,
         "cash_balance": cash_balance_c / 100.0,
         "spaces_total": spaces_total_c / 100.0,
+        "liquid_assets_total": (cash_balance_c + spaces_total_c) / 100.0,
+        "investments_total": investment_summary["investments_market_value"],
+        "investments_cost_basis": investment_summary["investments_cost_basis"],
+        "investments_unrealized_pnl": investment_summary["investments_unrealized_pnl"],
+        "investments_realized_pnl": investment_summary["investments_realized_pnl"],
+        "investment_income_total": investment_summary["investment_income_total"],
+        "investment_fee_total": investment_summary["investment_fee_total"],
+        "investment_positions_count": investment_summary["investment_positions_count"],
         "total_assets": total_assets_c / 100.0,
         "spaces": space_items,
         "by_category": items,
+        "investment_holdings": investment_state["holdings"],
     }
 
 
@@ -777,6 +1264,7 @@ def admin_monthly_trends(months: int = 12, session: Session = Depends(get_sessio
         ).all()
         to_spaces_c = sum(t.amount_cents for t in transfers if t.direction == "to_space")
         from_spaces_c = sum(t.amount_cents for t in transfers if t.direction == "from_space")
+        investment_month = summarize_month_investments(session, start, end)
 
         top_cats = sorted(expense_by_cat.items(), key=lambda x: x[1], reverse=True)[:5]
         top_users = sorted(expense_by_user.items(), key=lambda x: x[1], reverse=True)
@@ -795,6 +1283,7 @@ def admin_monthly_trends(months: int = 12, session: Session = Depends(get_sessio
                 {"user": users_map.get(tid, str(tid)), "total": cents / 100.0}
                 for tid, cents in top_users
             ],
+            **investment_month,
         })
 
     return result

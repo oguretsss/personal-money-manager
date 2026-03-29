@@ -105,7 +105,7 @@
             </form>
             <span x-show="editId !== {{ sp.id }}">{{ sp.name }}</span>
         </td>
-        <td data-label="Balance" class="amount">${{ "%.2f"|format(sp.balance) }}</td>
+        <td data-label="Balance" class="amount">&euro;{{ "%.2f"|format(sp.balance) }}</td>
         <td class="actions-cell">
             <span x-show="editId !== {{ sp.id }}" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
                 <button class="btn-sm" @click="startRename({ id: {{ sp.id }}, name: decodeURIComponent($el.dataset.name) })" data-name="{{ sp.name | urlencode }}">Rename</button>

@@ -1,0 +1,398 @@
+{% extends "base.html" %}
+{% set active = "investments" %}
+{% block title %}Investments - MoneyManage Admin{% endblock %}
+{% block content %}
+<script id="inv-init-data" type="application/json">{{ {"accounts": accounts, "assets": assets, "users": users} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('inv-init-data').textContent); return investmentsPage(d.accounts, d.assets, d.users); })()">
+<h2>Investments</h2>
+
+<div class="stat-grid">
+    <div class="stat-card">
+        <h3>Portfolio Value</h3>
+        <p>&euro;{{ "%.2f"|format(summary.investments_market_value or 0) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Cost Basis</h3>
+        <p>&euro;{{ "%.2f"|format(summary.investments_cost_basis or 0) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Unrealized P/L</h3>
+        <p class="{% if (summary.investments_unrealized_pnl or 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+            &euro;{{ "%.2f"|format(summary.investments_unrealized_pnl or 0) }}
+        </p>
+    </div>
+    <div class="stat-card">
+        <h3>Realized P/L</h3>
+        <p class="{% if (summary.investments_realized_pnl or 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+            &euro;{{ "%.2f"|format(summary.investments_realized_pnl or 0) }}
+        </p>
+    </div>
+    <div class="stat-card">
+        <h3>Income</h3>
+        <p class="text-green">&euro;{{ "%.2f"|format(summary.investment_income_total or 0) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Fees & Taxes</h3>
+        <p class="text-red">&euro;{{ "%.2f"|format(summary.investment_fee_total or 0) }}</p>
+    </div>
+</div>
+
+<div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1.5rem;">
+    <button @click="showAssetCreate = true">+ Add Asset</button>
+    <button @click="openTrade('buy')">+ Buy</button>
+    <button @click="openTrade('sell')" class="secondary">+ Sell</button>
+    <button @click="openCashEvent('dividend')" class="secondary">+ Dividend / Coupon</button>
+    <button @click="openPriceModal()" class="secondary">+ Update Price</button>
+</div>
+
+{% if holdings %}
+<h3>Holdings</h3>
+{% if holdings|length > 1 %}
+<div class="panel">
+    <h4 style="margin-top:0;">Allocation</h4>
+    <div style="max-width: 100%; margin: 0 auto;">
+        <canvas id="allocationChart"></canvas>
+    </div>
+</div>
+{% endif %}
+<table class="responsive-table">
+    <thead>
+        <tr>
+            <th>Asset</th>
+            <th>Type</th>
+            <th>Accounts</th>
+            <th class="text-right">Quantity</th>
+            <th class="text-right">Avg Cost</th>
+            <th class="text-right">Price</th>
+            <th class="text-right">Market Value</th>
+            <th class="text-right">Unrealized P/L</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for holding in holdings %}
+    <tr>
+        <td data-label="Asset">
+            <strong>{{ holding.asset_name }}</strong><br>
+            <small>{{ holding.isin }}{% if holding.ticker %} &middot; {{ holding.ticker }}{% endif %}</small>
+        </td>
+        <td data-label="Type">{{ holding.asset_type }}</td>
+        <td data-label="Accounts">{{ holding.account_names | join(", ") }}</td>
+        <td data-label="Quantity" class="amount">{{ "%.6f"|format(holding.quantity) }}</td>
+        <td data-label="Avg Cost" class="amount">&euro;{{ "%.2f"|format(holding.average_cost) }}</td>
+        <td data-label="Price" class="amount">
+            &euro;{{ "%.2f"|format(holding.latest_price) }}
+            {% if not holding.has_price %}
+            <span class="badge-muted">at cost</span>
+            {% elif holding.price_date %}
+            <small style="display:block;opacity:0.75;">{{ holding.price_date[:10] }}</small>
+            {% endif %}
+        </td>
+        <td data-label="Market Value" class="amount">&euro;{{ "%.2f"|format(holding.market_value) }}</td>
+        <td data-label="Unrealized P/L" class="amount {% if holding.unrealized_pnl >= 0 %}text-green{% else %}text-red{% endif %}">
+            &euro;{{ "%.2f"|format(holding.unrealized_pnl) }}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="panel">
+    <strong>No holdings yet.</strong>
+    <p style="margin-bottom:0.25rem;">Create an asset, record your first buy, then add a latest price to see market value and P/L.</p>
+</div>
+{% endif %}
+
+<h3>Operations</h3>
+<table class="responsive-table">
+    <thead>
+        <tr>
+            <th>Date</th>
+            <th>Type</th>
+            <th>Asset</th>
+            <th class="text-right">Qty</th>
+            <th class="text-right">Cash Impact</th>
+            <th class="text-right">Realized P/L</th>
+            <th>Note</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for op in operations %}
+    <tr>
+        <td data-label="Date">{{ op.happened_at[:10] }}</td>
+        <td data-label="Type">
+            <span class="op-pill op-{{ op.type }}">{{ op.type.replace("_", " ") }}</span>
+        </td>
+        <td data-label="Asset">
+            {% if op.asset_name %}
+            {{ op.asset_name }}
+            {% else %}
+            <span style="opacity:0.7;">&mdash;</span>
+            {% endif %}
+        </td>
+        <td data-label="Qty" class="amount">
+            {% if op.quantity is not none %}
+            {{ "%.6f"|format(op.quantity) }}
+            {% else %}
+            &mdash;
+            {% endif %}
+        </td>
+        <td data-label="Cash Impact" class="amount {% if op.cash_impact >= 0 %}text-green{% else %}text-red{% endif %}">
+            &euro;{{ "%.2f"|format(op.cash_impact) }}
+        </td>
+        <td data-label="Realized P/L" class="amount">
+            {% if op.realized_pnl is not none %}
+            <span class="{% if op.realized_pnl >= 0 %}text-green{% else %}text-red{% endif %}">
+                &euro;{{ "%.2f"|format(op.realized_pnl) }}
+            </span>
+            {% else %}
+            &mdash;
+            {% endif %}
+        </td>
+        <td data-label="Note">{{ op.note or "" }}</td>
+    </tr>
+    {% endfor %}
+    {% if not operations %}
+    <tr><td colspan="7">No investment operations found.</td></tr>
+    {% endif %}
+    </tbody>
+</table>
+
+<div x-show="showAssetCreate" x-cloak class="modal-overlay" @click.self="showAssetCreate = false">
+    <div class="modal-content">
+        <h3>Add Asset</h3>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Name</label>
+                <input type="text" x-model="assetForm.name" placeholder="iShares Core MSCI World">
+            </div>
+            <div class="form-row">
+                <label>Type</label>
+                <select x-model="assetForm.asset_type">
+                    <option value="etf">ETF</option>
+                    <option value="stock">Stock</option>
+                    <option value="bond">Bond</option>
+                </select>
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>ISIN</label>
+                <input type="text" x-model="assetForm.isin" placeholder="IE00B4L5Y983">
+            </div>
+            <div class="form-row">
+                <label>WKN</label>
+                <input type="text" x-model="assetForm.wkn" placeholder="A0RPWH">
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Ticker</label>
+                <input type="text" x-model="assetForm.ticker" placeholder="EUNL">
+            </div>
+            <div class="form-row">
+                <label>Currency</label>
+                <input type="text" x-model="assetForm.currency_code" maxlength="3">
+            </div>
+        </div>
+        <div class="form-row">
+            <label>Note</label>
+            <input type="text" x-model="assetForm.note" placeholder="Optional">
+        </div>
+        <div class="form-actions">
+            <button @click="showAssetCreate = false" class="secondary">Cancel</button>
+            <button @click="submitAsset()" :disabled="loading"
+                    x-text="loading ? 'Saving...' : 'Create Asset'"></button>
+        </div>
+    </div>
+</div>
+
+<div x-show="showTrade" x-cloak class="modal-overlay" @click.self="showTrade = false">
+    <div class="modal-content">
+        <h3 x-text="tradeForm.side === 'buy' ? 'Record Buy' : 'Record Sell'"></h3>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Account</label>
+                <select x-model="tradeForm.account_id">
+                    <template x-for="account in accounts" :key="account.id">
+                        <option :value="account.id" x-text="account.name"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Asset</label>
+                <select x-model="tradeForm.asset_id">
+                    <option value="">Select...</option>
+                    <template x-for="asset in assets" :key="asset.id">
+                        <option :value="asset.id" x-text="asset.name + ' (' + asset.isin + ')'"></option>
+                    </template>
+                </select>
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Quantity</label>
+                <input type="text" inputmode="decimal" x-model="tradeForm.quantity" placeholder="1.000000">
+            </div>
+            <div class="form-row">
+                <label>Unit Price</label>
+                <input type="text" inputmode="decimal" x-model="tradeForm.unit_price" placeholder="0.00">
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Fees</label>
+                <input type="text" inputmode="decimal" x-model="tradeForm.fees" placeholder="0.00">
+            </div>
+            <div class="form-row">
+                <label>Taxes</label>
+                <input type="text" inputmode="decimal" x-model="tradeForm.taxes" placeholder="0.00">
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>User</label>
+                <select x-model="tradeForm.created_by_telegram_id">
+                    <template x-for="u in users" :key="u.id">
+                        <option :value="u.telegram_id" x-text="u.name"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Date</label>
+                <input type="date" x-model="tradeForm.happened_at">
+            </div>
+        </div>
+        <div class="form-row">
+            <label>Note</label>
+            <input type="text" x-model="tradeForm.note" placeholder="Optional">
+        </div>
+        <div class="form-actions">
+            <button @click="showTrade = false" class="secondary">Cancel</button>
+            <button @click="submitTrade()" :disabled="loading"
+                    x-text="loading ? 'Saving...' : (tradeForm.side === 'buy' ? 'Record Buy' : 'Record Sell')"></button>
+        </div>
+    </div>
+</div>
+
+<div x-show="showCashEvent" x-cloak class="modal-overlay" @click.self="showCashEvent = false">
+    <div class="modal-content">
+        <h3>Record Cash Event</h3>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Type</label>
+                <select x-model="cashEventForm.event_type">
+                    <option value="dividend">Dividend</option>
+                    <option value="coupon">Coupon</option>
+                    <option value="fee">Fee</option>
+                    <option value="tax">Tax</option>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Amount</label>
+                <input type="text" inputmode="decimal" x-model="cashEventForm.amount" placeholder="0.00">
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Account</label>
+                <select x-model="cashEventForm.account_id">
+                    <template x-for="account in accounts" :key="account.id">
+                        <option :value="account.id" x-text="account.name"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Asset</label>
+                <select x-model="cashEventForm.asset_id">
+                    <option value="">Optional...</option>
+                    <template x-for="asset in assets" :key="asset.id">
+                        <option :value="asset.id" x-text="asset.name + ' (' + asset.isin + ')'"></option>
+                    </template>
+                </select>
+            </div>
+        </div>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>User</label>
+                <select x-model="cashEventForm.created_by_telegram_id">
+                    <template x-for="u in users" :key="u.id">
+                        <option :value="u.telegram_id" x-text="u.name"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Date</label>
+                <input type="date" x-model="cashEventForm.happened_at">
+            </div>
+        </div>
+        <div class="form-row">
+            <label>Note</label>
+            <input type="text" x-model="cashEventForm.note" placeholder="Optional">
+        </div>
+        <div class="form-actions">
+            <button @click="showCashEvent = false" class="secondary">Cancel</button>
+            <button @click="submitCashEvent()" :disabled="loading"
+                    x-text="loading ? 'Saving...' : 'Record Cash Event'"></button>
+        </div>
+    </div>
+</div>
+
+<div x-show="showPrice" x-cloak class="modal-overlay" @click.self="showPrice = false">
+    <div class="modal-content">
+        <h3>Update Latest Price</h3>
+        <div class="grid-2">
+            <div class="form-row">
+                <label>Asset</label>
+                <select x-model="priceForm.asset_id">
+                    <option value="">Select...</option>
+                    <template x-for="asset in assets" :key="asset.id">
+                        <option :value="asset.id" x-text="asset.name + ' (' + asset.isin + ')'"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="form-row">
+                <label>Price</label>
+                <input type="text" inputmode="decimal" x-model="priceForm.price" placeholder="0.00">
+            </div>
+        </div>
+        <div class="form-row">
+            <label>Date</label>
+            <input type="date" x-model="priceForm.priced_at">
+        </div>
+        <div class="form-actions">
+            <button @click="showPrice = false" class="secondary">Cancel</button>
+            <button @click="submitPrice()" :disabled="loading"
+                    x-text="loading ? 'Saving...' : 'Save Price'"></button>
+        </div>
+    </div>
+</div>
+</div>
+
+{% if holdings and holdings|length > 1 %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<script>
+new Chart(document.getElementById('allocationChart'), {
+    type: 'doughnut',
+    data: {
+        labels: [{% for h in holdings %}"{{ h.asset_name }}"{% if not loop.last %},{% endif %}{% endfor %}],
+        datasets: [{
+            data: [{% for h in holdings %}{{ h.market_value }}{% if not loop.last %},{% endif %}{% endfor %}],
+            backgroundColor: ['#2e7d32', '#1565c0', '#ef6c00', '#6a1b9a', '#00838f', '#ad1457', '#5d4037', '#455a64']
+        }]
+    },
+    options: {
+        plugins: {
+            legend: { position: window.innerWidth < 768 ? 'bottom' : 'right' },
+            tooltip: {
+                callbacks: {
+                    label: function(ctx) {
+                        return ctx.label + ': ' + '\u20AC' + ctx.parsed.toFixed(2);
+                    }
+                }
+            }
+        }
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

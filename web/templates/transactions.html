@@ -173,7 +173,7 @@
         <td data-label="Date">{{ tx.happened_at[:10] }}</td>
         <td data-label="Type">{{ tx.type }}</td>
         <td data-label="Category">{{ tx.category }}</td>
-        <td data-label="Amount" class="amount {% if tx.type == 'income' %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(tx.amount) }}</td>
+        <td data-label="Amount" class="amount {% if tx.type == 'income' %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(tx.amount) }}</td>
         <td data-label="Note">{{ tx.note }}</td>
         <td class="actions-cell">
             <button class="btn-sm" @click="openEdit(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Edit</button>

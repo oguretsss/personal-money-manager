@@ -8,23 +8,33 @@
 <div class="stat-grid">
     <div class="stat-card">
         <h3>Income (this month)</h3>
-        <p class="text-green">${{ "%.2f"|format(summary.income_total) }}</p>
+        <p class="text-green">&euro;{{ "%.2f"|format(summary.income_total) }}</p>
     </div>
     <div class="stat-card">
         <h3>Expenses (this month)</h3>
-        <p class="text-red">${{ "%.2f"|format(summary.expense_total) }}</p>
+        <p class="text-red">&euro;{{ "%.2f"|format(summary.expense_total) }}</p>
     </div>
     <div class="stat-card">
         <h3>Cash Balance</h3>
-        <p>${{ "%.2f"|format(summary.cash_balance) }}</p>
+        <p>&euro;{{ "%.2f"|format(summary.cash_balance) }}</p>
     </div>
     <div class="stat-card">
         <h3>Spaces Total</h3>
-        <p>${{ "%.2f"|format(summary.spaces_total) }}</p>
+        <p>&euro;{{ "%.2f"|format(summary.spaces_total) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Investments</h3>
+        <p>&euro;{{ "%.2f"|format(summary.investments_total or 0) }}</p>
+    </div>
+    <div class="stat-card">
+        <h3>Unrealized P/L</h3>
+        <p class="{% if (summary.investments_unrealized_pnl or 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+            &euro;{{ "%.2f"|format(summary.investments_unrealized_pnl or 0) }}
+        </p>
     </div>
     <div class="stat-card">
         <h3>Total Assets</h3>
-        <p>${{ "%.2f"|format(summary.total_assets) }}</p>
+        <p>&euro;{{ "%.2f"|format(summary.total_assets) }}</p>
     </div>
 </div>
 
@@ -34,7 +44,26 @@
     <thead><tr><th>Space</th><th class="text-right">Balance</th></tr></thead>
     <tbody>
     {% for sp in summary.spaces %}
-    <tr><td data-label="Space">{{ sp.space }}</td><td data-label="Balance" class="amount">${{ "%.2f"|format(sp.balance) }}</td></tr>
+    <tr><td data-label="Space">{{ sp.space }}</td><td data-label="Balance" class="amount">&euro;{{ "%.2f"|format(sp.balance) }}</td></tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+
+{% if summary.investment_holdings %}
+<h3>Investments</h3>
+<table class="responsive-table">
+    <thead><tr><th>Asset</th><th>Type</th><th class="text-right">Market Value</th><th class="text-right">Unrealized P/L</th></tr></thead>
+    <tbody>
+    {% for holding in summary.investment_holdings[:5] %}
+    <tr>
+        <td data-label="Asset">{{ holding.asset_name }}</td>
+        <td data-label="Type">{{ holding.asset_type }}</td>
+        <td data-label="Market Value" class="amount">&euro;{{ "%.2f"|format(holding.market_value) }}</td>
+        <td data-label="Unrealized P/L" class="amount {% if holding.unrealized_pnl >= 0 %}text-green{% else %}text-red{% endif %}">
+            &euro;{{ "%.2f"|format(holding.unrealized_pnl) }}
+        </td>
+    </tr>
     {% endfor %}
     </tbody>
 </table>
@@ -57,7 +86,7 @@
     <tr>
         <td data-label="Category">{{ item.category }}</td>
         <td data-label="Type">{{ item.type }}</td>
-        <td data-label="Total" class="amount {% if item.type == 'income' %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(item.total) }}</td>
+        <td data-label="Total" class="amount {% if item.type == 'income' %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(item.total) }}</td>
     </tr>
     {% endfor %}
     </tbody>
@@ -119,12 +148,12 @@
     <tr @click="expandedMonth = expandedMonth === '{{ t.year }}-{{ t.month }}' ? null : '{{ t.year }}-{{ t.month }}'"
         style="cursor:pointer;">
         <td data-label="Month">{{ month_names[t.month] }} {{ t.year }}</td>
-        <td data-label="Income" class="amount text-green">${{ "%.2f"|format(t.income_total) }}</td>
-        <td data-label="Expenses" class="amount text-red">${{ "%.2f"|format(t.expense_total) }}</td>
-        <td data-label="Net" class="amount {% if net >= 0 %}text-green{% else %}text-red{% endif %}">${{ "%.2f"|format(net) }}</td>
+        <td data-label="Income" class="amount text-green">&euro;{{ "%.2f"|format(t.income_total) }}</td>
+        <td data-label="Expenses" class="amount text-red">&euro;{{ "%.2f"|format(t.expense_total) }}</td>
+        <td data-label="Net" class="amount {% if net >= 0 %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(net) }}</td>
         <td data-label="Savings Rate" class="amount {% if savings_rate >= 0 %}text-green{% else %}text-red{% endif %}">{{ "%.1f"|format(savings_rate) }}%</td>
         <td data-label="vs Avg" class="amount {% if diff_from_avg <= 0 %}text-green{% else %}text-red{% endif %}">
-            {% if diff_from_avg > 0 %}+{% endif %}${{ "%.2f"|format(diff_from_avg) }}
+            {% if diff_from_avg > 0 %}+{% endif %}&euro;{{ "%.2f"|format(diff_from_avg) }}
         </td>
     </tr>
     <!-- Expanded detail row -->
@@ -135,7 +164,7 @@
             <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.5rem;">
                 {% for cat in t.top_expense_categories %}
                 <span style="background:#333;padding:0.25rem 0.6rem;border-radius:4px;font-size:0.85rem;">
-                    {{ cat.category }}: <span class="text-red">${{ "%.2f"|format(cat.total) }}</span>
+                    {{ cat.category }}: <span class="text-red">&euro;{{ "%.2f"|format(cat.total) }}</span>
                 </span>
                 {% endfor %}
             </div>
@@ -145,7 +174,7 @@
             <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-top:0.5rem;">
                 {% for u in t.expense_by_user %}
                 <span style="background:#333;padding:0.25rem 0.6rem;border-radius:4px;font-size:0.85rem;">
-                    {{ u.user }}: <span class="text-red">${{ "%.2f"|format(u.total) }}</span>
+                    {{ u.user }}: <span class="text-red">&euro;{{ "%.2f"|format(u.total) }}</span>
                 </span>
                 {% endfor %}
             </div>
@@ -153,7 +182,16 @@
             {% if t.to_spaces > 0 or t.from_spaces > 0 %}
             <strong style="display:block;margin-top:0.5rem;">Space Transfers:</strong>
             <span style="font-size:0.85rem;">
-                To spaces: ${{ "%.2f"|format(t.to_spaces) }} | From spaces: ${{ "%.2f"|format(t.from_spaces) }}
+                To spaces: &euro;{{ "%.2f"|format(t.to_spaces) }} | From spaces: &euro;{{ "%.2f"|format(t.from_spaces) }}
+            </span>
+            {% endif %}
+            {% if t.investment_buy_total > 0 or t.investment_sell_total > 0 or t.investment_income_total > 0 or t.investment_fee_total > 0 %}
+            <strong style="display:block;margin-top:0.5rem;">Investments:</strong>
+            <span style="font-size:0.85rem;">
+                Buys: &euro;{{ "%.2f"|format(t.investment_buy_total) }} |
+                Sells: &euro;{{ "%.2f"|format(t.investment_sell_total) }} |
+                Income: &euro;{{ "%.2f"|format(t.investment_income_total) }} |
+                Fees: &euro;{{ "%.2f"|format(t.investment_fee_total) }}
             </span>
             {% endif %}
         </td>
@@ -211,7 +249,7 @@ new Chart(document.getElementById('expensePie'), {
                     label: function(ctx) {
                         var total = ctx.dataset.data.reduce(function(a, b) { return a + b; }, 0);
                         var pct = (ctx.parsed / total * 100).toFixed(1);
-                        return ctx.label + ': $' + ctx.parsed.toFixed(2) + ' (' + pct + '%)';
+                        return ctx.label + ': ' + '\u20AC' + ctx.parsed.toFixed(2) + ' (' + pct + '%)';
                     }
                 }
             }
@@ -241,13 +279,13 @@ new Chart(document.getElementById('trendsChart'), {
             tooltip: {
                 callbacks: {
                     label: function(ctx) {
-                        return ctx.dataset.label + ': $' + ctx.parsed.y.toFixed(2);
+                        return ctx.dataset.label + ': ' + '\u20AC' + ctx.parsed.y.toFixed(2);
                     }
                 }
             }
         },
         scales: {
-            y: { beginAtZero: true, ticks: { callback: function(v) { return '$' + v; } } }
+            y: { beginAtZero: true, ticks: { callback: function(v) { return '\u20AC' + v; } } }
         }
     }
 });
@@ -319,13 +357,13 @@ new Chart(document.getElementById('userSpendingChart'), {
             legend: { position: 'top' },
             tooltip: {
                 callbacks: {
-                    label: function(ctx) { return ctx.dataset.label + ': $' + ctx.parsed.y.toFixed(2); }
+                    label: function(ctx) { return ctx.dataset.label + ': ' + '\u20AC' + ctx.parsed.y.toFixed(2); }
                 }
             }
         },
         scales: {
             x: { stacked: true },
-            y: { stacked: true, beginAtZero: true, ticks: { callback: function(v) { return '$' + v; } } }
+            y: { stacked: true, beginAtZero: true, ticks: { callback: function(v) { return '\u20AC' + v; } } }
         }
     }
 });
