@@ -1,7 +1,7 @@
 import os
 import httpx
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8000")
+API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8001")
 API_ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
 
 

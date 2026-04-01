@@ -153,9 +153,8 @@ def create_transaction(
     try:
         api.create_transaction(data)
         flash(request, "Transaction created", "success")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", str(e))
-        flash(request, f"Error: {detail}", "error")
+    except httpx.HTTPError as e:
+        flash_http_error(request, e)
     return RedirectResponse("/transactions", status_code=303)
 
 
@@ -179,9 +178,8 @@ def edit_transaction(
     try:
         api.update_transaction(tx_id, data)
         flash(request, "Transaction updated", "success")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", str(e))
-        flash(request, f"Error: {detail}", "error")
+    except httpx.HTTPError as e:
+        flash_http_error(request, e)
     return RedirectResponse("/transactions", status_code=303)
 
 
@@ -227,9 +225,8 @@ def delete_transaction(tx_id: int, request: Request, _user: str = Depends(requir
     try:
         api.delete_transaction(tx_id)
         flash(request, "Transaction deleted", "success")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", str(e))
-        flash(request, f"Error: {detail}", "error")
+    except httpx.HTTPError as e:
+        flash_http_error(request, e)
     return RedirectResponse("/transactions", status_code=303)
 
 
@@ -253,9 +250,8 @@ def rename_category(cat_id: int, request: Request, _user: str = Depends(require_
     try:
         api.rename_category(cat_id, name)
         flash(request, "Category renamed", "success")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", str(e))
-        flash(request, f"Error: {detail}", "error")
+    except httpx.HTTPError as e:
+        flash_http_error(request, e)
     return RedirectResponse("/categories", status_code=303)
 
 
@@ -264,9 +260,8 @@ def delete_category(cat_id: int, request: Request, _user: str = Depends(require_
     try:
         api.delete_category(cat_id)
         flash(request, "Category deleted", "success")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", str(e))
-        flash(request, f"Error: {detail}", "error")
+    except httpx.HTTPError as e:
+        flash_http_error(request, e)
     return RedirectResponse("/categories", status_code=303)
 
 
@@ -321,9 +316,8 @@ def rename_space(space_id: int, request: Request, _user: str = Depends(require_l
     try:
         api.rename_space(space_id, name)
         flash(request, "Space renamed", "success")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", str(e))
-        flash(request, f"Error: {detail}", "error")
+    except httpx.HTTPError as e:
+        flash_http_error(request, e)
     return RedirectResponse("/spaces", status_code=303)
 
 
@@ -332,24 +326,40 @@ def delete_space(space_id: int, request: Request, _user: str = Depends(require_l
     try:
         api.delete_space(space_id)
         flash(request, "Space deleted", "success")
-    except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", str(e))
-        flash(request, f"Error: {detail}", "error")
+    except httpx.HTTPError as e:
+        flash_http_error(request, e)
     return RedirectResponse("/spaces", status_code=303)
 
 
 # ── JSON API proxy endpoints ─────────────────────────────────────────
 
-def _error_json(e: httpx.HTTPStatusError) -> JSONResponse:
-    detail = e.response.json().get("detail", str(e))
-    return JSONResponse({"error": detail}, status_code=e.response.status_code)
+def _http_error_detail(e: httpx.HTTPError) -> str:
+    if isinstance(e, httpx.HTTPStatusError):
+        try:
+            data = e.response.json()
+            if isinstance(data, dict):
+                return data.get("error") or data.get("detail") or str(e)
+        except ValueError:
+            if e.response.text:
+                return e.response.text
+        return str(e)
+    return "Upstream API is unavailable"
+
+
+def _error_json(e: httpx.HTTPError) -> JSONResponse:
+    status_code = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else 502
+    return JSONResponse({"error": _http_error_detail(e)}, status_code=status_code)
+
+
+def flash_http_error(request: Request, e: httpx.HTTPError):
+    flash(request, f"Error: {_http_error_detail(e)}", "error")
 
 
 @app.get("/api/analytics/monthly-trends")
 def api_monthly_trends(_user: str = Depends(require_login), months: int = 12):
     try:
         return api.get_monthly_trends(months)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -357,7 +367,7 @@ def api_monthly_trends(_user: str = Depends(require_login), months: int = 12):
 def api_summary(_user: str = Depends(require_login)):
     try:
         return api.get_summary()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -371,7 +381,7 @@ def api_list_transactions(
 ):
     try:
         return api.list_transactions(type=type, category=category, page=page, per_page=per_page)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -379,7 +389,7 @@ def api_list_transactions(
 def api_create_transaction(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_transaction(data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -387,7 +397,7 @@ def api_create_transaction(_user: str = Depends(require_login), data: dict = Bod
 def api_update_transaction(tx_id: int, _user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.update_transaction(tx_id, data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -395,7 +405,7 @@ def api_update_transaction(tx_id: int, _user: str = Depends(require_login), data
 def api_delete_transaction(tx_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_transaction(tx_id)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -403,7 +413,7 @@ def api_delete_transaction(tx_id: int, _user: str = Depends(require_login)):
 def api_list_categories(_user: str = Depends(require_login)):
     try:
         return api.list_categories()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -411,7 +421,7 @@ def api_list_categories(_user: str = Depends(require_login)):
 def api_create_category(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_category(data.get("name", ""), data.get("type", ""))
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -419,7 +429,7 @@ def api_create_category(_user: str = Depends(require_login), data: dict = Body()
 def api_rename_category(cat_id: int, _user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.rename_category(cat_id, data.get("name", ""))
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -427,7 +437,7 @@ def api_rename_category(cat_id: int, _user: str = Depends(require_login), data: 
 def api_delete_category(cat_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_category(cat_id)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -435,7 +445,7 @@ def api_delete_category(cat_id: int, _user: str = Depends(require_login)):
 def api_list_spaces(_user: str = Depends(require_login)):
     try:
         return api.list_spaces()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -443,7 +453,7 @@ def api_list_spaces(_user: str = Depends(require_login)):
 def api_create_space(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_space(data.get("name", ""))
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -451,7 +461,7 @@ def api_create_space(_user: str = Depends(require_login), data: dict = Body()):
 def api_rename_space(space_id: int, _user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.rename_space(space_id, data.get("name", ""))
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -459,7 +469,7 @@ def api_rename_space(space_id: int, _user: str = Depends(require_login), data: d
 def api_delete_space(space_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_space(space_id)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -470,7 +480,7 @@ def api_space_transfer(_user: str = Depends(require_login), data: dict = Body())
         return JSONResponse({"error": "User is required"}, status_code=400)
     try:
         return api.space_transfer(int(telegram_id), data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -478,7 +488,7 @@ def api_space_transfer(_user: str = Depends(require_login), data: dict = Body())
 def api_list_investment_accounts(_user: str = Depends(require_login)):
     try:
         return api.list_investment_accounts()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -486,7 +496,7 @@ def api_list_investment_accounts(_user: str = Depends(require_login)):
 def api_list_investment_assets(_user: str = Depends(require_login)):
     try:
         return api.list_investment_assets()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -494,7 +504,7 @@ def api_list_investment_assets(_user: str = Depends(require_login)):
 def api_list_investment_holdings(_user: str = Depends(require_login)):
     try:
         return api.list_investment_holdings()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -502,7 +512,7 @@ def api_list_investment_holdings(_user: str = Depends(require_login)):
 def api_list_investment_operations(_user: str = Depends(require_login)):
     try:
         return api.list_investment_operations()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -510,7 +520,7 @@ def api_list_investment_operations(_user: str = Depends(require_login)):
 def api_investment_summary(_user: str = Depends(require_login)):
     try:
         return api.get_investment_summary()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -518,7 +528,7 @@ def api_investment_summary(_user: str = Depends(require_login)):
 def api_create_investment_asset(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_investment_asset(data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -526,7 +536,7 @@ def api_create_investment_asset(_user: str = Depends(require_login), data: dict 
 def api_create_investment_trade(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_investment_trade(data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -534,7 +544,7 @@ def api_create_investment_trade(_user: str = Depends(require_login), data: dict 
 def api_update_investment_trade(trade_id: int, _user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.update_investment_trade(trade_id, data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -542,7 +552,7 @@ def api_update_investment_trade(trade_id: int, _user: str = Depends(require_logi
 def api_delete_investment_trade(trade_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_investment_trade(trade_id)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -550,7 +560,7 @@ def api_delete_investment_trade(trade_id: int, _user: str = Depends(require_logi
 def api_create_investment_cash_event(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_investment_cash_event(data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -558,7 +568,7 @@ def api_create_investment_cash_event(_user: str = Depends(require_login), data: 
 def api_update_investment_cash_event(event_id: int, _user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.update_investment_cash_event(event_id, data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -566,7 +576,7 @@ def api_update_investment_cash_event(event_id: int, _user: str = Depends(require
 def api_delete_investment_cash_event(event_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_investment_cash_event(event_id)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -574,7 +584,7 @@ def api_delete_investment_cash_event(event_id: int, _user: str = Depends(require
 def api_create_investment_price(_user: str = Depends(require_login), data: dict = Body()):
     try:
         return api.create_investment_price(data)
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 
@@ -582,7 +592,7 @@ def api_create_investment_price(_user: str = Depends(require_login), data: dict 
 def api_list_users(_user: str = Depends(require_login)):
     try:
         return api.list_users()
-    except httpx.HTTPStatusError as e:
+    except httpx.HTTPError as e:
         return _error_json(e)
 
 

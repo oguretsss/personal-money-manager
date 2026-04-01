@@ -20,7 +20,14 @@ async function apiCall(method, url, body) {
         window.location.href = '/login';
         return null;
     }
-    const data = await resp.json();
+    const contentType = resp.headers.get('content-type') || '';
+    let data = {};
+    if (contentType.includes('application/json')) {
+        data = await resp.json();
+    } else {
+        const text = await resp.text();
+        data = text ? { error: text } : {};
+    }
     if (!resp.ok) {
         const msg = data.error || data.detail || 'Something went wrong';
         Alpine.store('toast').add(msg, 'error');
