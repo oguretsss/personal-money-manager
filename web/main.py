@@ -1,5 +1,6 @@
 import csv
 import io
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Form, Depends, Body
@@ -38,6 +39,42 @@ def flash(request: Request, message: str, category: str = "info"):
 def get_flashed_messages(request: Request) -> list[dict]:
     msgs = request.session.pop("_messages", [])
     return msgs
+
+
+def build_transaction_list_params(
+    *,
+    type: str | None = None,
+    category: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> dict:
+    params: dict[str, str | int] = {"page": page, "per_page": per_page}
+    if type:
+        params["type"] = type
+    if category:
+        params["category"] = category
+    if start:
+        try:
+            start_dt = datetime.fromisoformat(start)
+        except ValueError:
+            params["start"] = start
+        else:
+            if "T" not in start and " " not in start:
+                start_dt = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+            params["start"] = start_dt.isoformat(timespec="seconds")
+    if end:
+        try:
+            end_dt = datetime.fromisoformat(end)
+        except ValueError:
+            params["end"] = end
+        else:
+            # Date-only end filters should include the whole selected day.
+            if "T" not in end and " " not in end:
+                end_dt = end_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            params["end"] = end_dt.isoformat(timespec="seconds")
+    return params
 
 
 # ── Auth ───────────────────────────────────────────────────────────────
@@ -104,11 +141,14 @@ def transactions_page(
     end: str | None = None,
     page: int = 1,
 ):
-    params: dict = dict(type=type, category=category, page=page, per_page=50)
-    if start:
-        params["start"] = start + "T00:00:00"
-    if end:
-        params["end"] = end + "T23:59:59"
+    params = build_transaction_list_params(
+        type=type,
+        category=category,
+        start=start,
+        end=end,
+        page=page,
+        per_page=50,
+    )
     try:
         data = api.list_transactions(**params)
         categories = api.list_categories()
@@ -192,11 +232,14 @@ def export_transactions_csv(
     start: str | None = None,
     end: str | None = None,
 ):
-    params: dict = dict(type=type, category=category, page=1, per_page=10000)
-    if start:
-        params["start"] = start + "T00:00:00"
-    if end:
-        params["end"] = end + "T23:59:59"
+    params = build_transaction_list_params(
+        type=type,
+        category=category,
+        start=start,
+        end=end,
+        page=1,
+        per_page=10000,
+    )
     try:
         data = api.list_transactions(**params)
     except httpx.HTTPError:
