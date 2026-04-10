@@ -14,7 +14,7 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
 .stat-card { padding: 1rem; border: 1px solid #444; border-radius: 8px; text-align: center; }
 .stat-card h3 { margin: 0; font-size: 0.9rem; color: #aaa; }
-.stat-card p { margin: 0.5rem 0 0; font-size: 1.5rem; font-weight: bold; }
+.stat-card p { margin: 0.5rem 0 0; font-size: 1.4rem; font-weight: bold; }
 .panel { border: 1px solid #444; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
 .panel summary { font-weight: bold; font-size: 1.05rem; cursor: pointer; }
 
