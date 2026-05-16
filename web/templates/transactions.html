@@ -48,8 +48,11 @@
     </form>
 </details>
 
-<!-- Add Transaction Button -->
-<button @click="openAdd()" style="margin-bottom: 1.5rem;">+ Add Transaction</button>
+<!-- Add Transaction Buttons -->
+<div class="page-actions">
+    <button @click="openAdd()">+ Add Transaction</button>
+    <button @click="openCsvImport()" class="secondary">Import Expenses CSV</button>
+</div>
 
 <!-- Add Transaction Modal -->
 <div x-show="showAdd" x-cloak class="modal-overlay" @click.self="showAdd = false">
@@ -139,6 +142,116 @@
             <button @click="showEdit = false" class="secondary">Cancel</button>
             <button @click="submitEdit()" :disabled="loading"
                     x-text="loading ? 'Saving...' : 'Save Changes'"></button>
+        </div>
+    </div>
+</div>
+
+<!-- CSV Import Modal -->
+<div x-show="showCsvImport" x-cloak class="modal-overlay" @click.self="closeCsvImport()">
+    <div class="modal-content modal-wide">
+        <h3>Import Expenses From CSV</h3>
+
+        <div class="grid-2">
+            <div class="form-row">
+                <label>User</label>
+                <select x-model="csvImportUserId">
+                    <template x-for="u in users" :key="u.id">
+                        <option :value="u.telegram_id" x-text="u.name"></option>
+                    </template>
+                </select>
+            </div>
+            <div class="import-summary" x-show="csvFileName">
+                <span x-text="csvFileName"></span>
+                <span x-text="csvSummaryText()"></span>
+            </div>
+        </div>
+
+        <input type="file" accept=".csv,text/csv" x-ref="csvInput" class="visually-hidden" @change="handleCsvFile($event.target.files[0])">
+        <div class="csv-drop-zone"
+             :class="{ 'is-dragover': csvDragOver }"
+             @dragover.prevent="csvDragOver = true"
+             @dragleave.prevent="csvDragOver = false"
+             @drop.prevent="handleCsvDrop($event)">
+            <strong>Drop bank CSV here</strong>
+            <span>or</span>
+            <button type="button" class="secondary" @click="$refs.csvInput.click()">Choose File</button>
+        </div>
+
+        <template x-if="csvErrors.length">
+            <div class="import-errors">
+                <template x-for="err in csvErrors" :key="err">
+                    <div x-text="err"></div>
+                </template>
+            </div>
+        </template>
+        <div class="import-errors" x-show="missingCsvCategoryCount()">
+            <div x-text="missingCsvCategoryCount() + ' selected row(s) need an expense category before import.'"></div>
+        </div>
+
+        <template x-if="csvRows.length">
+            <div>
+                <div class="import-toolbar">
+                    <label class="inline-check">
+                        <input type="checkbox" :checked="allCsvRowsSelected()" @change="setAllCsvRows($event.target.checked)">
+                        Select all
+                    </label>
+                    <span x-text="selectedCsvRowsCount() + ' selected'"></span>
+                    <span x-show="csvSkippedIncomeCount" x-text="csvSkippedIncomeCount + ' income rows skipped'"></span>
+                </div>
+
+                <div class="table-scroll">
+                    <table class="responsive-table import-table">
+                        <colgroup>
+                            <col class="import-use-col">
+                            <col class="import-date-col">
+                            <col class="import-amount-col">
+                            <col class="import-category-col">
+                            <col class="import-note-col">
+                        </colgroup>
+                        <thead>
+                            <tr>
+                                <th>Use</th>
+                                <th>Date</th>
+                                <th class="text-right">Amount</th>
+                                <th>Category</th>
+                                <th>Note</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="row in csvRows" :key="row.id">
+                                <tr :class="{ 'row-muted': !row.selected, 'row-error': row.selected && !row.category_name }">
+                                    <td data-label="Use">
+                                        <input type="checkbox" x-model="row.selected" :disabled="row.imported">
+                                    </td>
+                                    <td data-label="Date">
+                                        <input type="datetime-local" x-model="row.happened_at" :disabled="row.imported">
+                                    </td>
+                                    <td data-label="Amount" class="text-right">
+                                        <input type="text" inputmode="decimal" x-model="row.amount" :disabled="row.imported">
+                                    </td>
+                                    <td data-label="Category">
+                                        <select x-model="row.category_name" :disabled="row.imported">
+                                            <option value="" x-text="row.csvCategory ? 'Select... (' + row.csvCategory + ')' : 'Select...'"></option>
+                                            <template x-for="c in expenseCategories()" :key="c.id">
+                                                <option :value="c.name" x-text="c.name"></option>
+                                            </template>
+                                        </select>
+                                    </td>
+                                    <td data-label="Note">
+                                        <input type="text" x-model="row.note" :disabled="row.imported">
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </template>
+
+        <div class="form-actions">
+            <button @click="closeCsvImport()" class="secondary">Cancel</button>
+            <button @click="submitCsvImport()" :disabled="loading || !selectedCsvRowsCount()"
+                    x-text="loading ? 'Importing...' : 'Submit Import'"></button>
         </div>
     </div>
 </div>

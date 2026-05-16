@@ -9,6 +9,99 @@ function parseAmount(value) {
     return parseFloat(String(value).replace(',', '.'));
 }
 
+function parseCsv(text) {
+    const rows = [];
+    let row = [];
+    let field = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        const next = text[i + 1];
+
+        if (ch === '"') {
+            if (inQuotes && next === '"') {
+                field += '"';
+                i++;
+            } else {
+                inQuotes = !inQuotes;
+            }
+            continue;
+        }
+
+        if (ch === ',' && !inQuotes) {
+            row.push(field);
+            field = '';
+            continue;
+        }
+
+        if ((ch === '\n' || ch === '\r') && !inQuotes) {
+            if (ch === '\r' && next === '\n') i++;
+            row.push(field);
+            if (row.some(cell => cell !== '')) rows.push(row);
+            row = [];
+            field = '';
+            continue;
+        }
+
+        field += ch;
+    }
+
+    row.push(field);
+    if (row.some(cell => cell !== '')) rows.push(row);
+    return rows;
+}
+
+function normalizeCsvHeader(value) {
+    return String(value || '').replace(/^\uFEFF/, '').trim().toLowerCase();
+}
+
+function normalizeCategoryMatchKey(value) {
+    return String(value || '')
+        .normalize('NFKC')
+        .replace(/[\uFE0E\uFE0F\u200B-\u200D\u00A0]/g, ' ')
+        .replace(/\p{Extended_Pictographic}/gu, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function categoryKeysMatch(sourceKey, categoryKey) {
+    if (!sourceKey || !categoryKey) return false;
+    if (sourceKey === categoryKey) return true;
+    return sourceKey.length >= 4
+        && categoryKey.length >= 4
+        && (sourceKey.startsWith(categoryKey) || categoryKey.startsWith(sourceKey));
+}
+
+function parseBankDate(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const normalized = raw.replace(' ', 'T');
+    const match = normalized.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?/);
+    if (match) {
+        return `${match[1]}T${match[2]}`;
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+        return `${raw}T00:00`;
+    }
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    const pad = n => String(n).padStart(2, '0');
+    return [
+        parsed.getFullYear(),
+        '-',
+        pad(parsed.getMonth() + 1),
+        '-',
+        pad(parsed.getDate()),
+        'T',
+        pad(parsed.getHours()),
+        ':',
+        pad(parsed.getMinutes()),
+    ].join('');
+}
+
 async function apiCall(method, url, body) {
     const opts = {
         method,
@@ -146,6 +239,13 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
         perPage: initialData.per_page || 50,
         categories: initialCategories || [],
         users: initialUsers || [],
+        csvRows: [],
+        csvErrors: [],
+        csvFileName: '',
+        csvSkippedIncomeCount: 0,
+        csvSkippedInvalidCount: 0,
+        csvDragOver: false,
+        csvImportUserId: '',
 
         // Add modal
         showAdd: false,
@@ -162,6 +262,9 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
         showEdit: false,
         editForm: { id: null, amount: '', category_name: '', happened_at: '', note: '' },
 
+        // CSV import modal
+        showCsvImport: false,
+
         // Confirm delete
         showConfirm: false,
         confirmId: null,
@@ -172,6 +275,13 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
             if (this.users.length && !this.addForm.created_by_telegram_id) {
                 this.addForm.created_by_telegram_id = this.users[0].telegram_id;
             }
+            if (this.users.length && !this.csvImportUserId) {
+                this.csvImportUserId = this.users[0].telegram_id;
+            }
+        },
+
+        expenseCategories() {
+            return this.categories.filter(c => c.type === 'expense');
         },
 
         openAdd() {
@@ -184,6 +294,195 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
                 this.addForm.created_by_telegram_id = this.users[0].telegram_id;
             }
             this.showAdd = true;
+        },
+
+        openCsvImport() {
+            this.csvErrors = [];
+            this.csvDragOver = false;
+            if (this.users.length && !this.csvImportUserId) {
+                this.csvImportUserId = this.users[0].telegram_id;
+            }
+            this.showCsvImport = true;
+        },
+
+        closeCsvImport() {
+            this.showCsvImport = false;
+            this.csvDragOver = false;
+        },
+
+        csvSummaryText() {
+            const parts = [`${this.csvRows.length} expenses ready`];
+            if (this.csvSkippedIncomeCount) parts.push(`${this.csvSkippedIncomeCount} income skipped`);
+            if (this.csvSkippedInvalidCount) parts.push(`${this.csvSkippedInvalidCount} invalid skipped`);
+            return parts.join(', ');
+        },
+
+        categoryFromCsv(value) {
+            const source = String(value || '').trim();
+            if (!source) return '';
+            const exact = this.expenseCategories().find(c => c.name === source);
+            if (exact) return exact.name;
+            const sourceKey = normalizeCategoryMatchKey(source);
+            const fuzzy = this.expenseCategories().find(c => {
+                const categoryKey = normalizeCategoryMatchKey(c.name);
+                return categoryKeysMatch(sourceKey, categoryKey);
+            });
+            return fuzzy ? fuzzy.name : '';
+        },
+
+        allCsvRowsSelected() {
+            const eligible = this.csvRows.filter(row => !row.imported);
+            return eligible.length > 0 && eligible.every(row => row.selected);
+        },
+
+        setAllCsvRows(selected) {
+            this.csvRows.forEach(row => {
+                if (!row.imported) row.selected = selected;
+            });
+        },
+
+        selectedCsvRowsCount() {
+            return this.csvRows.filter(row => row.selected && !row.imported).length;
+        },
+
+        missingCsvCategoryCount() {
+            return this.csvRows.filter(row => row.selected && !row.imported && !row.category_name).length;
+        },
+
+        handleCsvDrop(event) {
+            this.csvDragOver = false;
+            const file = event.dataTransfer.files && event.dataTransfer.files[0];
+            this.handleCsvFile(file);
+        },
+
+        async handleCsvFile(file) {
+            if (!file) return;
+            this.csvFileName = file.name;
+            this.csvRows = [];
+            this.csvErrors = [];
+            this.csvSkippedIncomeCount = 0;
+            this.csvSkippedInvalidCount = 0;
+
+            try {
+                const text = await file.text();
+                const rows = parseCsv(text);
+                if (rows.length < 2) {
+                    this.csvErrors.push('CSV has no transaction rows.');
+                    return;
+                }
+
+                const header = rows[0].map(normalizeCsvHeader);
+                const indexes = {
+                    startedDate: header.indexOf('started date'),
+                    amount: header.indexOf('amount'),
+                    category: header.indexOf('category'),
+                    description: header.indexOf('description'),
+                };
+                const missing = [];
+                if (indexes.startedDate === -1) missing.push('Started Date');
+                if (indexes.amount === -1) missing.push('Amount');
+                if (indexes.category === -1) missing.push('Category');
+                if (missing.length) {
+                    this.csvErrors.push(`Missing required column(s): ${missing.join(', ')}`);
+                    return;
+                }
+
+                const parsedRows = [];
+                rows.slice(1).forEach((cells, idx) => {
+                    const amount = parseAmount(cells[indexes.amount]);
+                    const happenedAt = parseBankDate(cells[indexes.startedDate]);
+                    if (!Number.isFinite(amount) || amount === 0 || !happenedAt) {
+                        this.csvSkippedInvalidCount++;
+                        return;
+                    }
+                    if (amount > 0) {
+                        this.csvSkippedIncomeCount++;
+                        return;
+                    }
+
+                    const csvCategory = String(cells[indexes.category] || '').trim();
+                    parsedRows.push({
+                        id: `${Date.now()}-${idx}`,
+                        selected: true,
+                        imported: false,
+                        happened_at: happenedAt,
+                        amount: Math.abs(amount).toFixed(2),
+                        category_name: this.categoryFromCsv(csvCategory),
+                        csvCategory,
+                        note: indexes.description === -1 ? '' : String(cells[indexes.description] || '').trim(),
+                    });
+                });
+
+                this.csvRows = parsedRows;
+                if (!parsedRows.length) {
+                    this.csvErrors.push('No expense rows were found in this CSV.');
+                }
+            } catch (err) {
+                this.csvErrors.push('Could not read this CSV file.');
+            } finally {
+                if (this.$refs.csvInput) this.$refs.csvInput.value = '';
+            }
+        },
+
+        validateCsvImportRows(rows) {
+            if (!this.csvImportUserId) return 'Please select a user.';
+            const categoryNames = new Set(this.expenseCategories().map(c => c.name));
+            for (const row of rows) {
+                const amount = parseAmount(row.amount);
+                if (!Number.isFinite(amount) || amount <= 0) return 'Every selected row needs a positive amount.';
+                if (!row.happened_at) return 'Every selected row needs a date.';
+                if (!row.category_name || !categoryNames.has(row.category_name)) {
+                    return 'Every selected row needs an existing expense category.';
+                }
+            }
+            return '';
+        },
+
+        async submitCsvImport() {
+            const rows = this.csvRows.filter(row => row.selected && !row.imported);
+            if (!rows.length) {
+                Alpine.store('toast').add('Select at least one expense to import', 'error');
+                return;
+            }
+            const validationError = this.validateCsvImportRows(rows);
+            if (validationError) {
+                Alpine.store('toast').add(validationError, 'error');
+                return;
+            }
+
+            this.loading = true;
+            let created = 0;
+            let failed = 0;
+            for (const row of rows) {
+                const payload = {
+                    type: 'expense',
+                    amount: parseAmount(row.amount),
+                    category_name: row.category_name,
+                    created_by_telegram_id: parseInt(this.csvImportUserId),
+                    happened_at: row.happened_at,
+                    note: row.note || '',
+                };
+                const result = await apiCall('POST', '/api/transactions', payload);
+                if (result) {
+                    row.imported = true;
+                    row.selected = false;
+                    created++;
+                } else {
+                    failed++;
+                }
+            }
+            this.loading = false;
+
+            if (created && !failed) {
+                Alpine.store('toast').add(`${created} expense(s) imported`, 'success');
+                this.showCsvImport = false;
+                Alpine.store('app').invalidate();
+                window.location.reload();
+                return;
+            }
+            if (created) {
+                Alpine.store('toast').add(`${created} imported, ${failed} failed`, 'info');
+            }
         },
 
         async submitAdd() {
