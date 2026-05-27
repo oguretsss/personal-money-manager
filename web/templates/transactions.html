@@ -7,7 +7,7 @@
 <h2>Transactions</h2>
 
 <!-- Filters -->
-<details class="panel" {% if filter_type or filter_category or filter_start or filter_end %}open{% endif %}>
+<details class="panel" {% if filter_type or filter_category or filter_user_id or filter_start or filter_end %}open{% endif %}>
     <summary>Filter</summary>
     <form method="get" action="/transactions">
         <div class="grid-2">
@@ -28,6 +28,15 @@
                     {% endfor %}
                 </select>
             </label>
+            <label>
+                User
+                <select name="user_id">
+                    <option value="">All</option>
+                    {% for u in users %}
+                    <option value="{{ u.telegram_id }}" {% if filter_user_id == u.telegram_id %}selected{% endif %}>{{ u.name }}</option>
+                    {% endfor %}
+                </select>
+            </label>
         </div>
         <div class="grid-2">
             <label>
@@ -42,7 +51,7 @@
         <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;">
             <button type="submit">Apply</button>
             <a href="/transactions" class="secondary" role="button" style="text-decoration:none;">Clear</a>
-            <a href="/transactions/export?{% if filter_type %}type={{ filter_type }}&{% endif %}{% if filter_category %}category={{ filter_category }}&{% endif %}{% if filter_start %}start={{ filter_start }}&{% endif %}{% if filter_end %}end={{ filter_end }}{% endif %}"
+            <a href="/transactions/export?{% if filter_type %}type={{ filter_type }}&{% endif %}{% if filter_category %}category={{ filter_category }}&{% endif %}{% if filter_user_id %}user_id={{ filter_user_id }}&{% endif %}{% if filter_start %}start={{ filter_start }}&{% endif %}{% if filter_end %}end={{ filter_end }}{% endif %}"
                role="button" class="secondary" style="text-decoration:none;">Export CSV</a>
         </div>
     </form>
@@ -307,7 +316,7 @@
     <ul>
         {% for p in range(1, total_pages + 1) %}
         <li>
-            <a href="/transactions?page={{ p }}{% if filter_type %}&type={{ filter_type }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_start %}&start={{ filter_start }}{% endif %}{% if filter_end %}&end={{ filter_end }}{% endif %}"
+            <a href="/transactions?page={{ p }}{% if filter_type %}&type={{ filter_type }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}{% if filter_start %}&start={{ filter_start }}{% endif %}{% if filter_end %}&end={{ filter_end }}{% endif %}"
                {% if p == data.page %}aria-current="page"{% endif %}>{{ p }}</a>
         </li>
         {% endfor %}

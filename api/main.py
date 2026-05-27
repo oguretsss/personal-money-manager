@@ -828,6 +828,7 @@ def space_transfer(payload: SpaceTransferCreate, telegram_id: int, session: Sess
 def admin_list_transactions(
     type: str | None = None,
     category: str | None = None,
+    user_id: int | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
     page: int = 1,
@@ -839,6 +840,8 @@ def admin_list_transactions(
         stmt = stmt.where(Transaction.type == type)
     if category:
         stmt = stmt.where(Category.name == category)
+    if user_id:
+        stmt = stmt.where(Transaction.created_by_telegram_id == user_id)
     if start:
         stmt = stmt.where(Transaction.happened_at >= start)
     if end:
@@ -849,6 +852,8 @@ def admin_list_transactions(
         count_stmt = count_stmt.where(Transaction.type == type)
     if category:
         count_stmt = count_stmt.where(Category.name == category)
+    if user_id:
+        count_stmt = count_stmt.where(Transaction.created_by_telegram_id == user_id)
     if start:
         count_stmt = count_stmt.where(Transaction.happened_at >= start)
     if end:
@@ -1335,6 +1340,15 @@ def admin_summary(start: datetime | None = None, end: datetime | None = None,
         for k, v in sorted(by_cat_c.items(), key=lambda kv: kv[1], reverse=True)
     ]
 
+    transfers = session.exec(
+        select(SpaceTransfer).where(
+            SpaceTransfer.happened_at >= start,
+            SpaceTransfer.happened_at < end,
+        )
+    ).all()
+    to_spaces_total_c = sum(t.amount_cents for t in transfers if t.direction == "to_space")
+    from_spaces_total_c = sum(t.amount_cents for t in transfers if t.direction == "from_space")
+
     base_cash_balance_c = calculate_base_cash_balance_c(session)
     spaces_total_c, space_items = list_space_balances(session)
     investment_state = build_investment_state(session)
@@ -1348,6 +1362,8 @@ def admin_summary(start: datetime | None = None, end: datetime | None = None,
         "end": end.isoformat(),
         "income_total": income_total_c / 100.0,
         "expense_total": expense_total_c / 100.0,
+        "to_spaces_total": to_spaces_total_c / 100.0,
+        "from_spaces_total": from_spaces_total_c / 100.0,
         "cash_balance": cash_balance_c / 100.0,
         "spaces_total": spaces_total_c / 100.0,
         "liquid_assets_total": (cash_balance_c + spaces_total_c) / 100.0,

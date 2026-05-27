@@ -41,10 +41,20 @@ def get_flashed_messages(request: Request) -> list[dict]:
     return msgs
 
 
+def normalize_user_id(user_id: str | int | None) -> int | None:
+    if not user_id:
+        return None
+    try:
+        return int(user_id)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_transaction_list_params(
     *,
     type: str | None = None,
     category: str | None = None,
+    user_id: str | int | None = None,
     start: str | None = None,
     end: str | None = None,
     page: int = 1,
@@ -55,6 +65,9 @@ def build_transaction_list_params(
         params["type"] = type
     if category:
         params["category"] = category
+    normalized_user_id = normalize_user_id(user_id)
+    if normalized_user_id:
+        params["user_id"] = normalized_user_id
     if start:
         try:
             start_dt = datetime.fromisoformat(start)
@@ -137,13 +150,16 @@ def transactions_page(
     _user: str = Depends(require_login),
     type: str | None = None,
     category: str | None = None,
+    user_id: str | None = None,
     start: str | None = None,
     end: str | None = None,
     page: int = 1,
 ):
+    filter_user_id = normalize_user_id(user_id)
     params = build_transaction_list_params(
         type=type,
         category=category,
+        user_id=filter_user_id,
         start=start,
         end=end,
         page=page,
@@ -164,6 +180,7 @@ def transactions_page(
         "users": users,
         "filter_type": type,
         "filter_category": category,
+        "filter_user_id": filter_user_id,
         "filter_start": start,
         "filter_end": end,
         "messages": get_flashed_messages(request),
@@ -229,12 +246,14 @@ def export_transactions_csv(
     _user: str = Depends(require_login),
     type: str | None = None,
     category: str | None = None,
+    user_id: str | None = None,
     start: str | None = None,
     end: str | None = None,
 ):
     params = build_transaction_list_params(
         type=type,
         category=category,
+        user_id=user_id,
         start=start,
         end=end,
         page=1,
@@ -419,11 +438,18 @@ def api_list_transactions(
     _user: str = Depends(require_login),
     type: str | None = None,
     category: str | None = None,
+    user_id: str | None = None,
     page: int = 1,
     per_page: int = 50,
 ):
     try:
-        return api.list_transactions(type=type, category=category, page=page, per_page=per_page)
+        return api.list_transactions(
+            type=type,
+            category=category,
+            user_id=normalize_user_id(user_id),
+            page=page,
+            per_page=per_page,
+        )
     except httpx.HTTPError as e:
         return _error_json(e)
 

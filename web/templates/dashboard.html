@@ -5,38 +5,54 @@
 <h2>Dashboard</h2>
 
 {% if summary %}
-<div class="stat-grid">
-    <div class="stat-card">
-        <h3>Income (this month)</h3>
-        <p class="text-green">&euro;{{ "%.2f"|format(summary.income_total) }}</p>
+<section class="dashboard-stat-section">
+    <h3>Overall Picture</h3>
+    <div class="stat-grid">
+        <div class="stat-card">
+            <h3>Cash Balance</h3>
+            <p>&euro;{{ "%.2f"|format(summary.cash_balance) }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Spaces Total</h3>
+            <p>&euro;{{ "%.2f"|format(summary.spaces_total) }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Investments</h3>
+            <p>&euro;{{ "%.2f"|format(summary.investments_total or 0) }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Unrealized P/L</h3>
+            <p class="{% if (summary.investments_unrealized_pnl or 0) >= 0 %}text-green{% else %}text-red{% endif %}">
+                &euro;{{ "%.2f"|format(summary.investments_unrealized_pnl or 0) }}
+            </p>
+        </div>
+        <div class="stat-card">
+            <h3>Total Assets</h3>
+            <p>&euro;{{ "%.2f"|format(summary.total_assets) }}</p>
+        </div>
     </div>
-    <div class="stat-card">
-        <h3>Expenses (this month)</h3>
-        <p class="text-red">&euro;{{ "%.2f"|format(summary.expense_total) }}</p>
+</section>
+
+<section class="dashboard-stat-section">
+    <h3>This Month</h3>
+    <div class="stat-grid stat-grid-month">
+        <div class="stat-card">
+            <h3>Expenses This Month</h3>
+            <p class="text-red">&euro;{{ "%.2f"|format(summary.expense_total) }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Income This Month</h3>
+            <p class="text-green">&euro;{{ "%.2f"|format(summary.income_total) }}</p>
+        </div>
+        <div class="stat-card">
+            <h3>Spaces This Month</h3>
+            <div class="stat-pair">
+                <span class="text-green">+&euro;{{ "%.2f"|format(summary.to_spaces_total or 0) }}</span>
+                <span class="text-red">-&euro;{{ "%.2f"|format(summary.from_spaces_total or 0) }}</span>
+            </div>
+        </div>
     </div>
-    <div class="stat-card">
-        <h3>Cash Balance</h3>
-        <p>&euro;{{ "%.2f"|format(summary.cash_balance) }}</p>
-    </div>
-    <div class="stat-card">
-        <h3>Spaces Total</h3>
-        <p>&euro;{{ "%.2f"|format(summary.spaces_total) }}</p>
-    </div>
-    <div class="stat-card">
-        <h3>Investments</h3>
-        <p>&euro;{{ "%.2f"|format(summary.investments_total or 0) }}</p>
-    </div>
-    <div class="stat-card">
-        <h3>Unrealized P/L</h3>
-        <p class="{% if (summary.investments_unrealized_pnl or 0) >= 0 %}text-green{% else %}text-red{% endif %}">
-            &euro;{{ "%.2f"|format(summary.investments_unrealized_pnl or 0) }}
-        </p>
-    </div>
-    <div class="stat-card">
-        <h3>Total Assets</h3>
-        <p>&euro;{{ "%.2f"|format(summary.total_assets) }}</p>
-    </div>
-</div>
+</section>
 
 {% if summary.spaces %}
 <h3>Spaces</h3>
