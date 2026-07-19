@@ -70,7 +70,7 @@
         <div class="grid-2">
             <div class="form-row">
                 <label>Type</label>
-                <select x-model="addForm.type">
+                <select x-model="addForm.type" @change="addForm.category_name = ''">
                     <option value="expense">Expense</option>
                     <option value="income">Income</option>
                 </select>
@@ -86,8 +86,8 @@
                 <label>Category</label>
                 <select x-model="addForm.category_name">
                     <option value="">Select...</option>
-                    <template x-for="c in categories" :key="c.id">
-                        <option :value="c.name" x-text="c.name + ' (' + c.type + ')'"></option>
+                    <template x-for="c in categoriesForType(addForm.type)" :key="c.id">
+                        <option :value="c.name" x-text="c.name"></option>
                     </template>
                 </select>
             </div>
@@ -131,8 +131,8 @@
                 <label>Category</label>
                 <select x-model="editForm.category_name">
                     <option value="">Select...</option>
-                    <template x-for="c in categories" :key="c.id">
-                        <option :value="c.name" x-text="c.name + ' (' + c.type + ')'" :selected="c.name === editForm.category_name"></option>
+                    <template x-for="c in categoriesForType(editForm.type)" :key="c.id">
+                        <option :value="c.name" x-text="c.name" :selected="c.name === editForm.category_name"></option>
                     </template>
                 </select>
             </div>

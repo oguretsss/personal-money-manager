@@ -200,6 +200,10 @@ function fabExpense() {
             this.showModal = true;
         },
 
+        filteredCategories() {
+            return this.categories.filter(c => c.type === this.form.type);
+        },
+
         async submit() {
             if (!this.form.amount || !this.form.category_name) {
                 Alpine.store('toast').add('Please fill amount and category', 'error');
@@ -260,7 +264,7 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
 
         // Edit modal
         showEdit: false,
-        editForm: { id: null, amount: '', category_name: '', happened_at: '', note: '' },
+        editForm: { id: null, type: '', amount: '', category_name: '', happened_at: '', note: '' },
 
         // CSV import modal
         showCsvImport: false,
@@ -282,6 +286,10 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
 
         expenseCategories() {
             return this.categories.filter(c => c.type === 'expense');
+        },
+
+        categoriesForType(type) {
+            return this.categories.filter(c => c.type === type);
         },
 
         openAdd() {
@@ -381,7 +389,6 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
                 const missing = [];
                 if (indexes.startedDate === -1) missing.push('Started Date');
                 if (indexes.amount === -1) missing.push('Amount');
-                if (indexes.category === -1) missing.push('Category');
                 if (missing.length) {
                     this.csvErrors.push(`Missing required column(s): ${missing.join(', ')}`);
                     return;
@@ -400,7 +407,9 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
                         return;
                     }
 
-                    const csvCategory = String(cells[indexes.category] || '').trim();
+                    const csvCategory = indexes.category === -1
+                        ? ''
+                        : String(cells[indexes.category] || '').trim();
                     parsedRows.push({
                         id: `${Date.now()}-${idx}`,
                         selected: true,
@@ -514,6 +523,7 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
         openEdit(tx) {
             this.editForm = {
                 id: tx.id,
+                type: tx.type,
                 amount: tx.amount,
                 category_name: tx.category,
                 happened_at: tx.happened_at ? tx.happened_at.slice(0, 10) : '',
