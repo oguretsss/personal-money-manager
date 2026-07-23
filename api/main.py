@@ -697,22 +697,26 @@ def list_categories(
     type: str,
     session: Session = Depends(get_session),
 ):
-    """Return all categories of a given type, ordered by usage frequency."""
+    """Return categories of a given type, ordered by usage in the last 30 days."""
     ensure_user_allowed(session, telegram_id)
 
     if type not in ("income", "expense"):
         raise HTTPException(status_code=400, detail="Invalid type")
 
-    # Get all categories of this type, ordered by usage count (most used first)
+    usage_since = datetime.utcnow() - timedelta(days=30)
     stmt = (
         select(
             Category.name,
             func.count(Transaction.id).label("cnt"),
         )
-        .outerjoin(Transaction, Transaction.category_id == Category.id)
+        .outerjoin(
+            Transaction,
+            (Transaction.category_id == Category.id)
+            & (Transaction.happened_at >= usage_since),
+        )
         .where(Category.type == type)
         .group_by(Category.name)
-        .order_by(func.count(Transaction.id).desc())
+        .order_by(func.count(Transaction.id).desc(), Category.name)
     )
 
     rows = session.exec(stmt).all()
@@ -940,16 +944,38 @@ def admin_delete_transaction(tx_id: int, session: Session = Depends(get_session)
 
 @app.get("/admin/categories", dependencies=[Depends(require_admin)])
 def admin_list_categories(session: Session = Depends(get_session)):
+    usage_counts = dict(
+        session.exec(
+            select(Transaction.category_id, func.count(Transaction.id))
+            .group_by(Transaction.category_id)
+        ).all()
+    )
+
+    usage_since = datetime.utcnow() - timedelta(days=30)
     stmt = (
-        select(Category, func.count(Transaction.id).label("cnt"))
-        .outerjoin(Transaction, Transaction.category_id == Category.id)
+        select(Category, func.count(Transaction.id).label("recent_cnt"))
+        .outerjoin(
+            Transaction,
+            (Transaction.category_id == Category.id)
+            & (Transaction.happened_at >= usage_since),
+        )
         .group_by(Category.id)
-        .order_by(Category.type, Category.name)
+        .order_by(
+            Category.type,
+            func.count(Transaction.id).desc(),
+            Category.name,
+        )
     )
     rows = session.exec(stmt).all()
     return [
-        {"id": cat.id, "name": cat.name, "type": cat.type, "usage_count": cnt}
-        for cat, cnt in rows
+        {
+            "id": cat.id,
+            "name": cat.name,
+            "type": cat.type,
+            "usage_count": usage_counts.get(cat.id, 0),
+            "recent_usage_count": recent_cnt,
+        }
+        for cat, recent_cnt in rows
     ]
 
 

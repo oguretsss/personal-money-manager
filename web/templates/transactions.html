@@ -86,7 +86,7 @@
                 <label>Category</label>
                 <select x-model="addForm.category_name">
                     <option value="">Select...</option>
-                    <template x-for="c in categoriesForType(addForm.type)" :key="c.id">
+                    <template x-for="c in categories.filter(c => c.type === addForm.type)" :key="c.id">
                         <option :value="c.name" x-text="c.name"></option>
                     </template>
                 </select>
@@ -131,7 +131,7 @@
                 <label>Category</label>
                 <select x-model="editForm.category_name">
                     <option value="">Select...</option>
-                    <template x-for="c in categoriesForType(editForm.type)" :key="c.id">
+                    <template x-for="c in categories.filter(c => c.type === editForm.type)" :key="c.id">
                         <option :value="c.name" x-text="c.name" :selected="c.name === editForm.category_name"></option>
                     </template>
                 </select>

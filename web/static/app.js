@@ -200,10 +200,6 @@ function fabExpense() {
             this.showModal = true;
         },
 
-        filteredCategories() {
-            return this.categories.filter(c => c.type === this.form.type);
-        },
-
         async submit() {
             if (!this.form.amount || !this.form.category_name) {
                 Alpine.store('toast').add('Please fill amount and category', 'error');
@@ -286,10 +282,6 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
 
         expenseCategories() {
             return this.categories.filter(c => c.type === 'expense');
-        },
-
-        categoriesForType(type) {
-            return this.categories.filter(c => c.type === type);
         },
 
         openAdd() {

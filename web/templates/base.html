@@ -6,7 +6,7 @@
     <title>{% block title %}MoneyManage Admin{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
     <link rel="stylesheet" href="/static/app.css?v=20260516-2">
-    <script src="/static/app.js?v=20260516-2"></script>
+    <script src="/static/app.js?v=20260723-1"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 </head>
 <body>
@@ -65,7 +65,7 @@
                             <label>Category</label>
                             <select x-model="form.category_name">
                                 <option value="">Select...</option>
-                                <template x-for="c in filteredCategories()" :key="c.id">
+                                <template x-for="c in categories.filter(c => c.type === form.type)" :key="c.id">
                                     <option :value="c.name" x-text="c.name"></option>
                                 </template>
                             </select>
