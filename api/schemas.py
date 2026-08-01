@@ -1,4 +1,6 @@
 from datetime import datetime
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 class TransactionCreate(BaseModel):
@@ -63,6 +65,26 @@ class CategoryUpdate(BaseModel):
 
 class SpaceUpdate(BaseModel):
     name: str = Field(min_length=1)
+
+
+class ApiTokenCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    principal_type: Literal["service", "user"] = "service"
+    telegram_id: int | None = None
+    scopes: list[str] = Field(min_length=1)
+    expires_at: datetime | None = None
+
+
+class ApiTokenCreated(BaseModel):
+    id: int
+    name: str
+    token: str
+    token_prefix: str
+    principal_type: str
+    telegram_id: int | None
+    scopes: list[str]
+    created_at: datetime
+    expires_at: datetime | None
 
 
 class InvestmentAccountCreate(BaseModel):

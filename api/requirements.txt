@@ -1,4 +1,5 @@
-fastapi==0.115.0
+fastapi==0.139.2
+starlette==1.3.1
 uvicorn[standard]==0.30.6
-sqlmodel==0.0.22
-python-dotenv==1.0.1
+sqlmodel==0.0.39
+python-dotenv==1.2.2

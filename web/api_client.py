@@ -3,14 +3,19 @@ import httpx
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8001")
 API_ADMIN_TOKEN = os.getenv("API_ADMIN_TOKEN", "")
+MIN_API_TOKEN_LENGTH = 32
 
 
 class AdminApiClient:
     def __init__(self):
+        if len(API_ADMIN_TOKEN) < MIN_API_TOKEN_LENGTH:
+            raise RuntimeError(
+                f"API_ADMIN_TOKEN must contain at least {MIN_API_TOKEN_LENGTH} characters"
+            )
         self._client = httpx.Client(
             base_url=API_BASE_URL,
             timeout=15.0,
-            headers={"X-Admin-Token": API_ADMIN_TOKEN},
+            headers={"Authorization": f"Bearer {API_ADMIN_TOKEN}"},
         )
 
     def get_summary(self) -> dict:

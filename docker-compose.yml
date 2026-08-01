@@ -1,7 +1,12 @@
 services:
   api:
     build: ./api
-    env_file: .env
+    environment:
+      API_ADMIN_TOKEN: "${API_ADMIN_TOKEN:?API_ADMIN_TOKEN is required}"
+      API_BOT_TOKEN: "${API_BOT_TOKEN:?API_BOT_TOKEN is required}"
+      DB_PATH: "${DB_PATH:-data/budget.sqlite}"
+      ENABLE_API_DOCS: "${ENABLE_API_DOCS:-false}"
+      TZ: "${TZ:-Europe/Berlin}"
     volumes:
       - ./data:/app/data
     ports:
@@ -10,14 +15,24 @@ services:
 
   bot:
     build: ./bot
-    env_file: .env
+    environment:
+      API_BASE_URL: "${API_BASE_URL:-http://api:8001}"
+      API_BOT_TOKEN: "${API_BOT_TOKEN:?API_BOT_TOKEN is required}"
+      BOT_TOKEN: "${BOT_TOKEN:?BOT_TOKEN is required}"
+      TZ: "${TZ:-Europe/Berlin}"
     depends_on:
       - api
     restart: unless-stopped
 
   web:
     build: ./web
-    env_file: .env
+    environment:
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?ADMIN_PASSWORD is required}"
+      ADMIN_USER: "${ADMIN_USER:-admin}"
+      API_ADMIN_TOKEN: "${API_ADMIN_TOKEN:?API_ADMIN_TOKEN is required}"
+      API_BASE_URL: "${API_BASE_URL:-http://api:8001}"
+      TZ: "${TZ:-Europe/Berlin}"
+      WEB_SECRET_KEY: "${WEB_SECRET_KEY:?WEB_SECRET_KEY is required}"
     depends_on:
       - api
     ports:

@@ -94,7 +94,7 @@ def build_transaction_list_params(
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {
+    return templates.TemplateResponse(request, "login.html", {
         "request": request,
         "error": None,
     })
@@ -106,7 +106,7 @@ def login_submit(request: Request, username: str = Form(), password: str = Form(
         response = RedirectResponse("/", status_code=303)
         response.set_cookie(COOKIE_NAME, create_session_cookie(username), max_age=MAX_AGE, httponly=True)
         return response
-    return templates.TemplateResponse("login.html", {
+    return templates.TemplateResponse(request, "login.html", {
         "request": request,
         "error": "Invalid credentials",
     }, status_code=401)
@@ -133,7 +133,7 @@ def dashboard(request: Request, _user: str = Depends(require_login)):
         trends = api.get_monthly_trends(12)
     except httpx.HTTPError:
         trends = []
-    return templates.TemplateResponse("dashboard.html", {
+    return templates.TemplateResponse(request, "dashboard.html", {
         "request": request,
         "summary": summary,
         "users": users,
@@ -173,7 +173,7 @@ def transactions_page(
         data = {"items": [], "total": 0, "page": 1, "per_page": 50}
         categories = []
         users = []
-    return templates.TemplateResponse("transactions.html", {
+    return templates.TemplateResponse(request, "transactions.html", {
         "request": request,
         "data": data,
         "categories": categories,
@@ -300,7 +300,7 @@ def categories_page(request: Request, _user: str = Depends(require_login)):
         categories = api.list_categories()
     except httpx.HTTPError:
         categories = []
-    return templates.TemplateResponse("categories.html", {
+    return templates.TemplateResponse(request, "categories.html", {
         "request": request,
         "categories": categories,
         "messages": get_flashed_messages(request),
@@ -337,7 +337,7 @@ def spaces_page(request: Request, _user: str = Depends(require_login)):
     except httpx.HTTPError:
         spaces = []
         users = []
-    return templates.TemplateResponse("spaces.html", {
+    return templates.TemplateResponse(request, "spaces.html", {
         "request": request,
         "spaces": spaces,
         "users": users,
@@ -361,7 +361,7 @@ def investments_page(request: Request, _user: str = Depends(require_login)):
         operations = []
         summary = {}
         users = []
-    return templates.TemplateResponse("investments.html", {
+    return templates.TemplateResponse(request, "investments.html", {
         "request": request,
         "accounts": accounts,
         "assets": assets,

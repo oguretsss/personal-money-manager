@@ -1,11 +1,21 @@
 import os
 import httpx
 
-API_BASE_URL = os.getenv("API_BASE_URL", "http://api:8001")
+MIN_API_TOKEN_LENGTH = 32
 
 class ApiClient:
     def __init__(self):
-        self._client = httpx.AsyncClient(base_url=API_BASE_URL, timeout=15.0)
+        api_base_url = os.getenv("API_BASE_URL", "http://api:8001")
+        api_bot_token = os.getenv("API_BOT_TOKEN", "")
+        if len(api_bot_token) < MIN_API_TOKEN_LENGTH:
+            raise RuntimeError(
+                f"API_BOT_TOKEN must contain at least {MIN_API_TOKEN_LENGTH} characters"
+            )
+        self._client = httpx.AsyncClient(
+            base_url=api_base_url,
+            timeout=15.0,
+            headers={"Authorization": f"Bearer {api_bot_token}"},
+        )
 
     async def create_transaction(self, telegram_id: int, payload: dict) -> dict:
         r = await self._client.post("/transactions", params={"telegram_id": telegram_id}, json=payload)

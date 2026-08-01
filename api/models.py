@@ -1,5 +1,6 @@
-from typing import Optional
 from datetime import datetime
+from typing import Optional
+
 from sqlmodel import SQLModel, Field
 
 class User(SQLModel, table=True):
@@ -8,6 +9,21 @@ class User(SQLModel, table=True):
     name: str
     role: str = "user"          # "user" or "admin"
     is_active: bool = True
+
+
+class ApiToken(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    token_prefix: str = Field(index=True, unique=True)
+    token_hash: str
+    principal_type: str = Field(index=True)  # "service" or "user"
+    telegram_id: Optional[int] = Field(default=None, index=True)
+    scopes: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    expires_at: Optional[datetime] = Field(default=None, index=True)
+    revoked_at: Optional[datetime] = Field(default=None, index=True)
+    last_used_at: Optional[datetime] = None
+
 
 class Category(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

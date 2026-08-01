@@ -44,8 +44,9 @@ uvicorn main:app --host 0.0.0.0 --port 8002 --reload
 
 ### Environment Variables (.env file)
 - `BOT_TOKEN` - Telegram bot token
-- `API_BASE_URL` - API endpoint (bot uses http://api:8000 in Docker)
+- `API_BASE_URL` - API endpoint (bot uses http://api:8001 in Docker)
 - `API_ADMIN_TOKEN` - Token for admin endpoints
+- `API_BOT_TOKEN` - Dedicated Bearer token used by the Telegram bot
 - `DB_PATH` - SQLite database path (default: data/budget.sqlite)
 - `ADMIN_USER` - Web admin login username (default: admin)
 - `ADMIN_PASSWORD` - Web admin login password
@@ -69,8 +70,10 @@ uvicorn main:app --host 0.0.0.0 --port 8002 --reload
 3. Bot calls API endpoints via `bot/api_client.py`
 
 **Authentication:**
-- Regular users: Telegram ID passed as query parameter
-- Admin API endpoints: `X-Admin-Token` header matching `API_ADMIN_TOKEN`
+- All API endpoints except `/health` require an `Authorization: Bearer` token
+- Personal tokens derive the Telegram actor from the authenticated token
+- The bot service token may pass an active Telegram ID because it has the dedicated `act_as_telegram_user` scope
+- Admin API endpoints require the `admin` scope; `API_ADMIN_TOKEN` is the bootstrap admin credential
 - Web admin: Cookie-based session auth via `itsdangerous` signed cookies (24h expiry)
 
 ### Data Model

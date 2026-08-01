@@ -1,12 +1,13 @@
 from collections import defaultdict
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlmodel import Session, select, func
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 
 from db import init_db, get_session
 from models import (
     User,
+    ApiToken,
     Category,
     Transaction,
     Space,
@@ -21,13 +22,36 @@ from schemas import (
     TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem,
     SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
     CategoryUpdate, SpaceUpdate,
+    ApiTokenCreate, ApiTokenCreated,
     InvestmentAssetCreate, InvestmentTradeCreate,
     InvestmentTradeUpdate, InvestmentCashEventCreate,
     InvestmentCashEventUpdate, InvestmentPriceCreate,
 )
-from auth import require_admin
+from auth import (
+    ALL_SCOPES,
+    AuthContext,
+    SCOPE_ACT_AS_TELEGRAM_USER,
+    SCOPE_ADMIN,
+    SCOPE_FAMILY_READ,
+    SCOPE_REPORTS_SEND,
+    SCOPE_SPACES_WRITE,
+    SCOPE_TRANSACTIONS_DELETE,
+    SCOPE_TRANSACTIONS_WRITE,
+    create_stored_token,
+    require_admin,
+    require_scopes,
+    resolve_request_user,
+)
 
-app = FastAPI(title="Family Budget API")
+ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+app = FastAPI(
+    title="Family Budget API",
+    docs_url="/docs" if ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_API_DOCS else None,
+)
 
 QUANTITY_SCALE = 1_000_000
 DEFAULT_INVESTMENT_ACCOUNT_NAME = "MaxBlue"
@@ -39,12 +63,6 @@ INVESTMENT_CASH_EVENT_TYPES = {"dividend", "coupon", "fee", "tax"}
 @app.on_event("startup")
 def on_startup():
     init_db()
-
-def ensure_user_allowed(session: Session, telegram_id: int) -> User:
-    user = session.exec(select(User).where(User.telegram_id == telegram_id)).first()
-    if not user or not user.is_active:
-        raise HTTPException(status_code=403, detail="User not allowed")
-    return user
 
 def get_or_create_category(session: Session, name: str, tx_type: str) -> Category:
     cat = session.exec(select(Category).where(Category.name == name)).first()
@@ -446,7 +464,10 @@ def health():
 
 
 @app.get("/users/active")
-def list_active_users(session: Session = Depends(get_session)):
+def list_active_users(
+    _auth: AuthContext = Depends(require_scopes(SCOPE_REPORTS_SEND)),
+    session: Session = Depends(get_session),
+):
     """Return telegram_ids of all active users."""
     users = session.exec(select(User).where(User.is_active == True)).all()
     return [u.telegram_id for u in users]
@@ -454,13 +475,19 @@ def list_active_users(session: Session = Depends(get_session)):
 
 @app.get("/report/monthly")
 def monthly_report(
-    telegram_id: int,
     year: int,
     month: int,
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
     session: Session = Depends(get_session),
 ):
     """Generate monthly report: income, expenses, top-5 expense categories, space transfers."""
-    ensure_user_allowed(session, telegram_id)
+    resolve_request_user(auth, telegram_id, session, required=False)
+
+    if month < 1 or month > 12:
+        raise HTTPException(status_code=400, detail="Month must be between 1 and 12")
+    if year < 2000 or year > 2100:
+        raise HTTPException(status_code=400, detail="Year must be between 2000 and 2100")
 
     # Calculate date range for the month
     start = datetime(year, month, 1)
@@ -531,10 +558,146 @@ def admin_upsert_user(telegram_id: int, name: str, is_active: bool = True, role:
     session.commit()
     return {"ok": True}
 
+
+@app.get("/admin/api-tokens", dependencies=[Depends(require_admin)])
+def admin_list_api_tokens(session: Session = Depends(get_session)):
+    tokens = session.exec(
+        select(ApiToken).order_by(ApiToken.created_at.desc())
+    ).all()
+    now = datetime.utcnow()
+    return [
+        {
+            "id": token.id,
+            "name": token.name,
+            "token_prefix": token.token_prefix,
+            "principal_type": token.principal_type,
+            "telegram_id": token.telegram_id,
+            "scopes": token.scopes.split(),
+            "created_at": token.created_at.isoformat(),
+            "expires_at": token.expires_at.isoformat() if token.expires_at else None,
+            "revoked_at": token.revoked_at.isoformat() if token.revoked_at else None,
+            "last_used_at": token.last_used_at.isoformat() if token.last_used_at else None,
+            "is_active": (
+                token.revoked_at is None
+                and (token.expires_at is None or token.expires_at > now)
+            ),
+        }
+        for token in tokens
+    ]
+
+
+@app.post(
+    "/admin/api-tokens",
+    response_model=ApiTokenCreated,
+    dependencies=[Depends(require_admin)],
+)
+def admin_create_api_token(
+    payload: ApiTokenCreate,
+    session: Session = Depends(get_session),
+):
+    scopes = {scope.strip() for scope in payload.scopes if scope.strip()}
+    unknown_scopes = scopes - ALL_SCOPES
+    if unknown_scopes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown scopes: {', '.join(sorted(unknown_scopes))}",
+        )
+    if not scopes:
+        raise HTTPException(status_code=400, detail="At least one scope is required")
+
+    telegram_id = payload.telegram_id
+    if payload.principal_type == "user":
+        if telegram_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail="telegram_id is required for a user token",
+            )
+        user = session.exec(
+            select(User).where(User.telegram_id == telegram_id)
+        ).first()
+        if not user or not user.is_active:
+            raise HTTPException(status_code=400, detail="Active user not found")
+        forbidden_user_scopes = {
+            SCOPE_ACT_AS_TELEGRAM_USER,
+            SCOPE_ADMIN,
+        }
+        if scopes.intersection(forbidden_user_scopes):
+            raise HTTPException(
+                status_code=400,
+                detail="User tokens cannot receive admin or act_as_telegram_user",
+            )
+    elif telegram_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="telegram_id is only valid for a user token",
+        )
+
+    write_scopes = {
+        SCOPE_TRANSACTIONS_WRITE,
+        SCOPE_TRANSACTIONS_DELETE,
+        SCOPE_SPACES_WRITE,
+    }
+    if (
+        payload.principal_type == "service"
+        and scopes.intersection(write_scopes)
+        and SCOPE_ACT_AS_TELEGRAM_USER not in scopes
+        and SCOPE_ADMIN not in scopes
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="A write-capable service token must receive act_as_telegram_user",
+        )
+
+    expires_at = payload.expires_at
+    if expires_at and expires_at.tzinfo is not None:
+        expires_at = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
+    if expires_at and expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=400, detail="expires_at must be in the future")
+
+    stored, raw_token = create_stored_token(
+        session,
+        name=payload.name,
+        principal_type=payload.principal_type,
+        telegram_id=telegram_id,
+        scopes=scopes,
+        expires_at=expires_at,
+    )
+    return ApiTokenCreated(
+        id=stored.id,
+        name=stored.name,
+        token=raw_token,
+        token_prefix=stored.token_prefix,
+        principal_type=stored.principal_type,
+        telegram_id=stored.telegram_id,
+        scopes=stored.scopes.split(),
+        created_at=stored.created_at,
+        expires_at=stored.expires_at,
+    )
+
+
+@app.delete("/admin/api-tokens/{token_id}", dependencies=[Depends(require_admin)])
+def admin_revoke_api_token(
+    token_id: int,
+    session: Session = Depends(get_session),
+):
+    token = session.get(ApiToken, token_id)
+    if not token:
+        raise HTTPException(status_code=404, detail="Token not found")
+    if token.revoked_at is None:
+        token.revoked_at = datetime.utcnow()
+        session.add(token)
+        session.commit()
+    return {"ok": True}
+
+
 @app.post("/transactions")
-def create_transaction(payload: TransactionCreate, telegram_id: int,
-                       session: Session = Depends(get_session)):
-    ensure_user_allowed(session, telegram_id)
+def create_transaction(
+    payload: TransactionCreate,
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_TRANSACTIONS_WRITE)),
+    session: Session = Depends(get_session),
+):
+    user = resolve_request_user(auth, telegram_id, session, required=True)
 
     tx_type = payload.type.strip().lower()
     if tx_type not in ("income", "expense"):
@@ -551,7 +714,7 @@ def create_transaction(payload: TransactionCreate, telegram_id: int,
         category_id=cat.id,
         happened_at=happened_at,
         note=payload.note or "",
-        created_by_telegram_id=telegram_id,
+        created_by_telegram_id=user.telegram_id,
     )
     session.add(tx)
     session.commit()
@@ -559,14 +722,22 @@ def create_transaction(payload: TransactionCreate, telegram_id: int,
     return {"id": tx.id, "ok": True}
 
 @app.delete("/transactions/{tx_id}")
-def delete_transaction(tx_id: int, telegram_id: int,
-                       session: Session = Depends(get_session)):
-    user = ensure_user_allowed(session, telegram_id)
+def delete_transaction(
+    tx_id: int,
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_TRANSACTIONS_DELETE)),
+    session: Session = Depends(get_session),
+):
+    user = resolve_request_user(auth, telegram_id, session, required=True)
     tx = session.get(Transaction, tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Not found")
     # простое правило: удалять может админ или тот, кто создал
-    if user.role != "admin" and tx.created_by_telegram_id != telegram_id:
+    if (
+        not auth.has_scope(SCOPE_ADMIN)
+        and user.role != "admin"
+        and tx.created_by_telegram_id != user.telegram_id
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     session.delete(tx)
@@ -574,9 +745,14 @@ def delete_transaction(tx_id: int, telegram_id: int,
     return {"ok": True}
 
 @app.get("/summary", response_model=SummaryResponse)
-def summary(telegram_id: int, start: datetime | None = None, end: datetime | None = None,
-            session: Session = Depends(get_session)):
-    ensure_user_allowed(session, telegram_id)
+def summary(
+    telegram_id: int | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
+    session: Session = Depends(get_session),
+):
+    resolve_request_user(auth, telegram_id, session, required=False)
 
     now = datetime.utcnow()
     if not start or not end:
@@ -660,13 +836,14 @@ def summary(telegram_id: int, start: datetime | None = None, end: datetime | Non
 
 @app.get("/transactions/recent")
 def recent_transactions(
-    telegram_id: int,
+    telegram_id: int | None = None,
     type: str = "expense",
-    limit: int = 10,
+    limit: int = Query(default=10, ge=1, le=100),
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
     session: Session = Depends(get_session),
 ):
     """Return recent transactions of a given type with amount, category, and note."""
-    ensure_user_allowed(session, telegram_id)
+    resolve_request_user(auth, telegram_id, session, required=False)
 
     if type not in ("income", "expense"):
         raise HTTPException(status_code=400, detail="Invalid type")
@@ -693,12 +870,13 @@ def recent_transactions(
 
 @app.get("/categories")
 def list_categories(
-    telegram_id: int,
     type: str,
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
     session: Session = Depends(get_session),
 ):
     """Return categories of a given type, ordered by usage in the last 30 days."""
-    ensure_user_allowed(session, telegram_id)
+    resolve_request_user(auth, telegram_id, session, required=False)
 
     if type not in ("income", "expense"):
         raise HTTPException(status_code=400, detail="Invalid type")
@@ -724,10 +902,11 @@ def list_categories(
 
 @app.get("/spaces/top")
 def top_spaces(
-    telegram_id: int,
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
     session: Session = Depends(get_session),
 ):
-    ensure_user_allowed(session, telegram_id)
+    resolve_request_user(auth, telegram_id, session, required=False)
 
     since = datetime.utcnow() - timedelta(days=30)
 
@@ -757,8 +936,12 @@ def get_or_create_space(session: Session, name: str) -> Space:
     return s
 
 @app.get("/spaces")
-def list_spaces(telegram_id: int, session: Session = Depends(get_session)):
-    ensure_user_allowed(session, telegram_id)
+def list_spaces(
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
+    session: Session = Depends(get_session),
+):
+    resolve_request_user(auth, telegram_id, session, required=False)
 
     spaces = session.exec(select(Space)).all()
     if not spaces:
@@ -786,8 +969,13 @@ def list_spaces(telegram_id: int, session: Session = Depends(get_session)):
     return [{"id": sp.id, "name": sp.name, "balance": balances.get(sp.id, 0) / 100.0} for sp in spaces]
 
 @app.post("/spaces/transfer")
-def space_transfer(payload: SpaceTransferCreate, telegram_id: int, session: Session = Depends(get_session)):
-    ensure_user_allowed(session, telegram_id)
+def space_transfer(
+    payload: SpaceTransferCreate,
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_SPACES_WRITE)),
+    session: Session = Depends(get_session),
+):
+    user = resolve_request_user(auth, telegram_id, session, required=True)
 
     direction = payload.direction.strip()
     if direction not in ("to_space", "from_space"):
@@ -818,7 +1006,7 @@ def space_transfer(payload: SpaceTransferCreate, telegram_id: int, session: Sess
         direction=direction,
         happened_at=happened_at,
         note=payload.note or "",
-        created_by_telegram_id=telegram_id,
+        created_by_telegram_id=user.telegram_id,
     )
     session.add(tr)
     session.commit()
