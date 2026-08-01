@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% set active = "limits" %}
+{% block title %}Category Limits - MoneyManage Admin{% endblock %}
+{% block content %}
+<script id="limits-init-data" type="application/json">{{ {"categories": categories, "limits": limits} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('limits-init-data').textContent); return limitsPage(d.categories, d.limits); })()">
+    <div class="page-heading">
+        <div>
+            <h2>Category Limits</h2>
+            <p>Set monthly spending limits for expense categories. Limits warn you, but never block a transaction.</p>
+        </div>
+    </div>
+
+    <div class="limit-thresholds" aria-label="Limit alert thresholds">
+        <span class="threshold-chip limit-warning">50% — heads-up</span>
+        <span class="threshold-chip limit-caution">70% — take care</span>
+        <span class="threshold-chip limit-exceeded">100% — limit reached</span>
+    </div>
+
+    <table class="responsive-table limits-table">
+        <thead>
+            <tr>
+                <th>Category</th>
+                <th>Monthly Limit</th>
+                <th>This Month</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <template x-for="cat in sortedCategories()" :key="cat.id">
+                <tr>
+                    <td data-label="Category" x-text="cat.name"></td>
+                    <td data-label="Monthly Limit">
+                        <div class="limit-input-wrap">
+                            <span aria-hidden="true">€</span>
+                            <input type="text" inputmode="decimal" x-model="amounts[cat.id]"
+                                   :aria-label="`Monthly limit for ${cat.name}`" placeholder="Not set">
+                        </div>
+                    </td>
+                    <td data-label="This Month">
+                        <template x-if="limitFor(cat.id)">
+                            <span x-text="`${formatMoney(limitFor(cat.id).spent)} of ${formatMoney(limitFor(cat.id).limit)}`"></span>
+                        </template>
+                        <span x-show="!limitFor(cat.id)" class="muted">No limit</span>
+                    </td>
+                    <td data-label="Status">
+                        <template x-if="limitFor(cat.id)">
+                            <span class="limit-status-badge"
+                                  :class="`limit-${limitFor(cat.id).status}`"
+                                  x-text="`${Math.round(limitFor(cat.id).percentage)}% used`"></span>
+                        </template>
+                        <span x-show="!limitFor(cat.id)" class="muted">Not monitored</span>
+                    </td>
+                    <td class="actions-cell">
+                        <div class="limit-actions">
+                            <button class="btn-sm" @click="saveLimit(cat)" :disabled="loadingCategoryId === cat.id"
+                                    x-text="loadingCategoryId === cat.id ? 'Saving...' : 'Save'"></button>
+                            <button class="btn-sm btn-danger" @click="askRemove(cat)"
+                                    x-show="limitFor(cat.id)" :disabled="loadingCategoryId === cat.id">Remove</button>
+                        </div>
+                    </td>
+                </tr>
+            </template>
+            <tr x-show="categories.length === 0">
+                <td colspan="5">No expense categories found.</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <div x-show="showConfirm" x-cloak class="confirm-overlay" @click.self="showConfirm = false">
+        <div class="confirm-box">
+            <p>Stop monitoring <strong x-text="removeCategory ? removeCategory.name : ''"></strong>?</p>
+            <div class="confirm-actions">
+                <button @click="showConfirm = false" class="secondary">Cancel</button>
+                <button @click="removeLimit()" :disabled="loadingCategoryId !== null" class="btn-danger"
+                        x-text="loadingCategoryId !== null ? 'Removing...' : 'Remove Limit'"></button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

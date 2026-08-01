@@ -30,7 +30,7 @@ from auth import (
 )
 from db import engine
 from main import app
-from models import ApiToken, Transaction, User
+from models import ApiToken, CategoryLimit, Transaction, User
 
 
 class ApiAuthenticationTests(unittest.TestCase):
@@ -289,6 +289,87 @@ class ApiAuthenticationTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+    def test_category_limit_progress_and_transaction_thresholds(self):
+        self.add_user(1009)
+        category_response = self.client.post(
+            "/admin/categories",
+            params={"name": "Cafe limit test", "type": "expense"},
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        category_id = category_response.json()["id"]
+
+        limit_response = self.client.put(
+            f"/admin/limits/{category_id}",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={"amount": 100},
+        )
+
+        self.assertEqual(limit_response.status_code, 200)
+        self.assertEqual(limit_response.json()["status"], "safe")
+        self.assertEqual(limit_response.json()["spent"], 0)
+
+        expected_statuses = [
+            (49, "safe"),
+            (1, "warning"),
+            (20, "caution"),
+            (30, "exceeded"),
+        ]
+        for amount, expected_status in expected_statuses:
+            response = self.client.post(
+                "/admin/transactions",
+                headers=self.bearer(ADMIN_TOKEN),
+                json={
+                    "type": "expense",
+                    "amount": amount,
+                    "category_name": "Cafe limit test",
+                    "created_by_telegram_id": 1009,
+                    "happened_at": "2026-08-10T12:00:00",
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["limit_status"]["status"], expected_status)
+
+        list_response = self.client.get(
+            "/admin/limits",
+            params={"year": 2026, "month": 8},
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(len(list_response.json()), 1)
+        self.assertEqual(list_response.json()[0]["percentage"], 100)
+        self.assertEqual(list_response.json()[0]["status"], "exceeded")
+
+        update_response = self.client.put(
+            f"/admin/limits/{category_id}",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={"amount": 200},
+        )
+        self.assertEqual(update_response.status_code, 200)
+        with Session(engine) as session:
+            self.assertEqual(len(session.exec(select(CategoryLimit)).all()), 1)
+
+        delete_response = self.client.delete(
+            f"/admin/limits/{category_id}",
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(delete_response.status_code, 200)
+
+    def test_limit_rejects_income_category(self):
+        category_response = self.client.post(
+            "/admin/categories",
+            params={"name": "Income limit test", "type": "income"},
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+
+        response = self.client.put(
+            f"/admin/limits/{category_response.json()['id']}",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={"amount": 100},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Limits can only be set for expense categories")
 
 
 if __name__ == "__main__":

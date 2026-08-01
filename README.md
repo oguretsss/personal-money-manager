@@ -10,11 +10,12 @@ A family budget management system with a FastAPI backend, Telegram bot frontend,
 - **Telegram Interface** - Manage finances directly from Telegram
 - **Quick Entry** - Send just a number to quickly add an expense
 - **Web Admin Panel** - Mobile-friendly reactive UI for managing all data
-  - Dashboard with expense pie chart and financial summary
+  - Dashboard with expense pie chart, financial summary, and monthly category-limit progress
   - Transaction management with add/edit/delete (no page reloads)
   - Quick expense button (FAB) accessible from every page
   - Responsive design — tables convert to cards on mobile
-  - Categories and spaces management with inline editing
+  - Categories, monthly spending limits, and spaces management with inline editing
+  - Non-blocking 50%, 70%, and 100% limit warnings while adding expenses
 
 ## Tech Stack
 

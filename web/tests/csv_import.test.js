@@ -68,3 +68,44 @@ test('keeps supporting plain amounts and ISO dates from existing CSV files', () 
     assert.equal(app.parseBankAmount('-6.95'), -6.95);
     assert.equal(app.parseBankDate('2026-07-26 14:05:00'), '2026-07-26T14:05');
 });
+
+test('applies the configured category limit thresholds to a projected expense', () => {
+    const app = loadAppScript();
+    const limits = [{
+        category: 'Cafe',
+        limit: 100,
+        spent: 50,
+        period: '2026-08',
+    }];
+
+    const preview = app.projectedLimitFor(limits, {
+        type: 'expense',
+        amount: '20',
+        category_name: 'Cafe',
+        happened_at: '2026-08-10',
+    });
+
+    assert.equal(preview.percentage, 70);
+    assert.equal(preview.status, 'caution');
+    assert.equal(preview.title, '70% threshold');
+    assert.equal(app.limitStatusForPercentage(49.9), 'safe');
+    assert.equal(app.limitStatusForPercentage(50), 'warning');
+    assert.equal(app.limitStatusForPercentage(100), 'exceeded');
+});
+
+test('does not show a stale limit preview for a transaction in another month', () => {
+    const app = loadAppScript();
+    const preview = app.projectedLimitFor([{
+        category: 'Cafe',
+        limit: 100,
+        spent: 50,
+        period: '2026-08',
+    }], {
+        type: 'expense',
+        amount: '20',
+        category_name: 'Cafe',
+        happened_at: '2026-07-31',
+    });
+
+    assert.equal(preview, null);
+});

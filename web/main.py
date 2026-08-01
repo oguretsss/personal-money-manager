@@ -133,11 +133,16 @@ def dashboard(request: Request, _user: str = Depends(require_login)):
         trends = api.get_monthly_trends(12)
     except httpx.HTTPError:
         trends = []
+    try:
+        limits = api.list_limits()
+    except httpx.HTTPError:
+        limits = []
     return templates.TemplateResponse(request, "dashboard.html", {
         "request": request,
         "summary": summary,
         "users": users,
         "trends": trends,
+        "limits": limits,
         "messages": get_flashed_messages(request),
     })
 
@@ -173,11 +178,16 @@ def transactions_page(
         data = {"items": [], "total": 0, "page": 1, "per_page": 50}
         categories = []
         users = []
+    try:
+        limits = api.list_limits()
+    except httpx.HTTPError:
+        limits = []
     return templates.TemplateResponse(request, "transactions.html", {
         "request": request,
         "data": data,
         "categories": categories,
         "users": users,
+        "limits": limits,
         "filter_type": type,
         "filter_category": category,
         "filter_user_id": filter_user_id,
@@ -325,6 +335,22 @@ def delete_category(cat_id: int, request: Request, _user: str = Depends(require_
     except httpx.HTTPError as e:
         flash_http_error(request, e)
     return RedirectResponse("/categories", status_code=303)
+
+
+@app.get("/limits", response_class=HTMLResponse)
+def limits_page(request: Request, _user: str = Depends(require_login)):
+    try:
+        categories = [category for category in api.list_categories() if category["type"] == "expense"]
+        limits = api.list_limits()
+    except httpx.HTTPError:
+        categories = []
+        limits = []
+    return templates.TemplateResponse(request, "limits.html", {
+        "request": request,
+        "categories": categories,
+        "limits": limits,
+        "messages": get_flashed_messages(request),
+    })
 
 
 # ── Spaces ─────────────────────────────────────────────────────────────
@@ -506,6 +532,34 @@ def api_rename_category(cat_id: int, _user: str = Depends(require_login), data: 
 def api_delete_category(cat_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_category(cat_id)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.get("/api/limits")
+def api_list_limits(
+    _user: str = Depends(require_login),
+    year: int | None = None,
+    month: int | None = None,
+):
+    try:
+        return api.list_limits(year=year, month=month)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.put("/api/limits/{category_id}")
+def api_set_limit(category_id: int, _user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.set_limit(category_id, data.get("amount"))
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/limits/{category_id}")
+def api_delete_limit(category_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.delete_limit(category_id)
     except httpx.HTTPError as e:
         return _error_json(e)
 

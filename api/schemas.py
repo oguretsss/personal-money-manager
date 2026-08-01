@@ -63,6 +63,10 @@ class AdminTransactionCreate(BaseModel):
 class CategoryUpdate(BaseModel):
     name: str = Field(min_length=1)
 
+
+class CategoryLimitUpdate(BaseModel):
+    amount: float = Field(gt=0)
+
 class SpaceUpdate(BaseModel):
     name: str = Field(min_length=1)
 

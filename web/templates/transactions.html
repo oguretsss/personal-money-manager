@@ -2,8 +2,8 @@
 {% set active = "transactions" %}
 {% block title %}Transactions - MoneyManage Admin{% endblock %}
 {% block content %}
-<script id="tx-init-data" type="application/json">{{ {"data": data, "categories": categories, "users": users} | tojson }}</script>
-<div x-data="(() => { const d = JSON.parse(document.getElementById('tx-init-data').textContent); return transactionsPage(d.data, d.categories, d.users); })()">
+<script id="tx-init-data" type="application/json">{{ {"data": data, "categories": categories, "users": users, "limits": limits} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('tx-init-data').textContent); return transactionsPage(d.data, d.categories, d.users, d.limits); })()">
 <h2>Transactions</h2>
 
 <!-- Filters -->
@@ -110,6 +110,12 @@
                 <input type="text" x-model="addForm.note" placeholder="Optional">
             </div>
         </div>
+        <template x-if="projectedLimit()">
+            <div class="limit-notice" :class="`limit-${projectedLimit().status}`">
+                <strong x-text="projectedLimit().title"></strong>
+                <span x-text="projectedLimit().message"></span>
+            </div>
+        </template>
         <div class="form-actions">
             <button @click="showAdd = false" class="secondary">Cancel</button>
             <button @click="submitAdd()" :disabled="loading"

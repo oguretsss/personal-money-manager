@@ -54,6 +54,36 @@
     </div>
 </section>
 
+{% if limits %}
+<section class="dashboard-stat-section">
+    <div class="section-heading">
+        <h3>Category Limits</h3>
+        <a href="/limits">Manage limits</a>
+    </div>
+    <div class="limit-grid">
+        {% for limit in limits %}
+        <article class="limit-card limit-{{ limit.status }}">
+            <div class="limit-card-header">
+                <strong>{{ limit.category }}</strong>
+                <span>{{ "%.0f"|format(limit.percentage) }}%</span>
+            </div>
+            <div class="limit-amount-row">
+                <span>&euro;{{ "%.2f"|format(limit.spent) }} spent</span>
+                <span>&euro;{{ "%.2f"|format(limit.limit) }} limit</span>
+            </div>
+            <div class="limit-progress-track" role="progressbar"
+                 aria-label="{{ limit.category }} limit usage"
+                 aria-valuemin="0" aria-valuemax="100"
+                 aria-valuenow="{{ 100 if limit.percentage > 100 else limit.percentage }}">
+                <span class="limit-progress-fill" style="width: {{ 100 if limit.percentage > 100 else limit.percentage }}%;"></span>
+            </div>
+            <p class="limit-comment">{{ limit.message }}</p>
+        </article>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
 {% if summary.spaces %}
 <h3>Spaces</h3>
 <table class="responsive-table">

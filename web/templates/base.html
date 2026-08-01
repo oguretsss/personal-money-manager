@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}MoneyManage Admin{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-    <link rel="stylesheet" href="/static/app.css?v=20260516-2">
-    <script src="/static/app.js?v=20260801-1"></script>
+    <link rel="stylesheet" href="/static/app.css?v=20260801-1">
+    <script src="/static/app.js?v=20260801-2"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 </head>
 <body>
@@ -21,6 +21,7 @@
             <li><a href="/transactions" class="{% if active == 'transactions' %}active{% endif %}">Transactions</a></li>
             <li><a href="/investments" class="{% if active == 'investments' %}active{% endif %}">Investments</a></li>
             <li><a href="/categories" class="{% if active == 'categories' %}active{% endif %}">Categories</a></li>
+            <li><a href="/limits" class="{% if active == 'limits' %}active{% endif %}">Limits</a></li>
             <li><a href="/spaces" class="{% if active == 'spaces' %}active{% endif %}">Spaces</a></li>
             <li><a href="/logout">Logout</a></li>
         </ul>
@@ -89,6 +90,12 @@
                         <label>Note</label>
                         <input type="text" x-model="form.note" placeholder="Optional">
                     </div>
+                    <template x-if="projectedLimit()">
+                        <div class="limit-notice" :class="`limit-${projectedLimit().status}`">
+                            <strong x-text="projectedLimit().title"></strong>
+                            <span x-text="projectedLimit().message"></span>
+                        </div>
+                    </template>
                     <div class="form-actions">
                         <button @click="showModal = false" class="secondary">Cancel</button>
                         <button @click="submit()" :disabled="loading"

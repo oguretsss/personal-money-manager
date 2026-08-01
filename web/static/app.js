@@ -9,6 +9,64 @@ function parseAmount(value) {
     return parseFloat(String(value).replace(',', '.'));
 }
 
+function formatMoney(value) {
+    return `€${Number(value || 0).toFixed(2)}`;
+}
+
+function limitStatusForPercentage(percentage) {
+    if (percentage >= 100) return 'exceeded';
+    if (percentage >= 70) return 'caution';
+    if (percentage >= 50) return 'warning';
+    return 'safe';
+}
+
+function projectedLimitFor(limits, form) {
+    if (!form || form.type !== 'expense' || !form.category_name) return null;
+    const amount = parseAmount(form.amount);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    const limit = (limits || []).find(item => item.category === form.category_name);
+    if (!limit) return null;
+    const transactionMonth = String(form.happened_at || todayDate()).slice(0, 7);
+    if (transactionMonth !== limit.period) return null;
+
+    const projectedSpent = Number(limit.spent || 0) + amount;
+    const percentage = limit.limit > 0 ? (projectedSpent / limit.limit) * 100 : 0;
+    const status = limitStatusForPercentage(percentage);
+    const overBy = Math.max(projectedSpent - limit.limit, 0);
+    let title = 'Within monthly limit';
+    let message = `This expense would use ${Math.round(percentage)}% of the ${limit.category} monthly limit (${formatMoney(projectedSpent)} of ${formatMoney(limit.limit)}).`;
+
+    if (status === 'warning') title = '50% threshold';
+    if (status === 'caution') title = '70% threshold';
+    if (status === 'exceeded') {
+        title = 'Limit reached';
+        message = overBy > 0
+            ? `This expense would exceed the ${limit.category} limit by ${formatMoney(overBy)}.`
+            : `This expense would use the full ${limit.category} limit.`;
+    }
+
+    return {
+        ...limit,
+        spent: projectedSpent,
+        percentage,
+        over_by: overBy,
+        status,
+        title,
+        message,
+    };
+}
+
+function announceLimitStatus(result) {
+    const status = result && result.limit_status;
+    if (!status || status.status === 'safe') return false;
+    const toastType = status.status === 'exceeded'
+        ? 'error'
+        : (status.status === 'caution' ? 'caution' : 'warning');
+    Alpine.store('toast').add(status.message, toastType);
+    return true;
+}
+
 function parseBankAmount(value) {
     if (typeof value === 'number') return value;
     const raw = String(value || '').trim();
@@ -180,6 +238,7 @@ document.addEventListener('alpine:init', () => {
     Alpine.store('app', {
         categories: null,
         users: null,
+        limits: null,
         async fetchCategories() {
             if (this.categories) return this.categories;
             const data = await apiCall('GET', '/api/categories');
@@ -192,9 +251,16 @@ document.addEventListener('alpine:init', () => {
             if (data) this.users = data;
             return this.users || [];
         },
+        async fetchLimits() {
+            if (this.limits) return this.limits;
+            const data = await apiCall('GET', '/api/limits');
+            if (data) this.limits = data;
+            return this.limits || [];
+        },
         invalidate() {
             this.categories = null;
             this.users = null;
+            this.limits = null;
         },
     });
 
@@ -208,6 +274,7 @@ function fabExpense() {
         loading: false,
         categories: [],
         users: [],
+        limits: [],
         form: {
             type: 'expense',
             amount: '',
@@ -225,10 +292,15 @@ function fabExpense() {
             this.form.type = 'expense';
             this.categories = await Alpine.store('app').fetchCategories();
             this.users = await Alpine.store('app').fetchUsers();
+            this.limits = await Alpine.store('app').fetchLimits();
             if (this.users.length && !this.form.created_by_telegram_id) {
                 this.form.created_by_telegram_id = this.users[0].telegram_id;
             }
             this.showModal = true;
+        },
+
+        projectedLimit() {
+            return projectedLimitFor(this.limits, this.form);
         },
 
         async submit() {
@@ -251,10 +323,11 @@ function fabExpense() {
             this.loading = false;
             if (result) {
                 Alpine.store('toast').add('Transaction created', 'success');
+                const hasLimitAlert = announceLimitStatus(result);
                 this.showModal = false;
                 Alpine.store('app').invalidate();
                 // Reload page to reflect new data
-                setTimeout(() => window.location.reload(), 500);
+                setTimeout(() => window.location.reload(), hasLimitAlert ? 1800 : 500);
             }
         },
     };
@@ -262,7 +335,7 @@ function fabExpense() {
 
 /* ── Transactions page component ────────────────────────────────────── */
 
-function transactionsPage(initialData, initialCategories, initialUsers) {
+function transactionsPage(initialData, initialCategories, initialUsers, initialLimits = []) {
     return {
         transactions: initialData.items || [],
         total: initialData.total || 0,
@@ -270,6 +343,7 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
         perPage: initialData.per_page || 50,
         categories: initialCategories || [],
         users: initialUsers || [],
+        limits: initialLimits || [],
         csvRows: [],
         csvErrors: [],
         csvFileName: '',
@@ -325,6 +399,10 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
                 this.addForm.created_by_telegram_id = this.users[0].telegram_id;
             }
             this.showAdd = true;
+        },
+
+        projectedLimit() {
+            return projectedLimitFor(this.limits, this.addForm);
         },
 
         openCsvImport() {
@@ -519,9 +597,14 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
             this.loading = false;
             if (result) {
                 Alpine.store('toast').add('Transaction created', 'success');
+                const hasLimitAlert = announceLimitStatus(result);
                 this.showAdd = false;
                 Alpine.store('app').invalidate();
-                window.location.reload();
+                if (hasLimitAlert) {
+                    setTimeout(() => window.location.reload(), 1800);
+                } else {
+                    window.location.reload();
+                }
             }
         },
 
@@ -575,6 +658,79 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
 }
 
 /* ── Categories page component ──────────────────────────────────────── */
+
+function limitsPage(initialCategories, initialLimits) {
+    return {
+        categories: initialCategories || [],
+        limits: initialLimits || [],
+        amounts: {},
+        loadingCategoryId: null,
+        showConfirm: false,
+        removeCategory: null,
+
+        init() {
+            this.categories.forEach(category => {
+                const limit = this.limitFor(category.id);
+                this.amounts[category.id] = limit ? Number(limit.limit).toFixed(2) : '';
+            });
+        },
+
+        limitFor(categoryId) {
+            return this.limits.find(limit => limit.category_id === categoryId) || null;
+        },
+
+        sortedCategories() {
+            return [...this.categories].sort((a, b) => {
+                const aConfigured = this.limitFor(a.id) ? 0 : 1;
+                const bConfigured = this.limitFor(b.id) ? 0 : 1;
+                return aConfigured - bConfigured || a.name.localeCompare(b.name);
+            });
+        },
+
+        formatMoney,
+
+        async saveLimit(category) {
+            const amount = parseAmount(this.amounts[category.id]);
+            if (!Number.isFinite(amount) || amount <= 0) {
+                Alpine.store('toast').add('Enter a positive monthly limit', 'error');
+                return;
+            }
+
+            this.loadingCategoryId = category.id;
+            const result = await apiCall('PUT', `/api/limits/${category.id}`, { amount });
+            this.loadingCategoryId = null;
+            if (!result) return;
+
+            const index = this.limits.findIndex(limit => limit.category_id === category.id);
+            if (index === -1) this.limits.push(result);
+            else this.limits.splice(index, 1, result);
+            this.amounts[category.id] = Number(result.limit).toFixed(2);
+            Alpine.store('app').limits = null;
+            Alpine.store('toast').add(`Limit saved for ${category.name}`, 'success');
+        },
+
+        askRemove(category) {
+            this.removeCategory = category;
+            this.showConfirm = true;
+        },
+
+        async removeLimit() {
+            if (!this.removeCategory) return;
+            const category = this.removeCategory;
+            this.loadingCategoryId = category.id;
+            const result = await apiCall('DELETE', `/api/limits/${category.id}`);
+            this.loadingCategoryId = null;
+            if (!result) return;
+
+            this.limits = this.limits.filter(limit => limit.category_id !== category.id);
+            this.amounts[category.id] = '';
+            this.showConfirm = false;
+            this.removeCategory = null;
+            Alpine.store('app').limits = null;
+            Alpine.store('toast').add(`Limit removed for ${category.name}`, 'success');
+        },
+    };
+}
 
 function categoriesPage(initialCategories) {
     return {

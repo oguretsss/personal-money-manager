@@ -30,6 +30,14 @@ class Category(SQLModel, table=True):
     name: str = Field(index=True, unique=True)
     type: str  # "income" or "expense"
 
+
+class CategoryLimit(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    category_id: int = Field(foreign_key="category.id", index=True, unique=True)
+    amount_cents: int
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
 class Transaction(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     type: str  # "income" or "expense"

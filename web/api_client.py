@@ -63,6 +63,22 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def list_limits(self, year: int | None = None, month: int | None = None) -> list:
+        params = {k: v for k, v in {"year": year, "month": month}.items() if v is not None}
+        r = self._client.get("/admin/limits", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    def set_limit(self, category_id: int, amount: float) -> dict:
+        r = self._client.put(f"/admin/limits/{category_id}", json={"amount": amount})
+        r.raise_for_status()
+        return r.json()
+
+    def delete_limit(self, category_id: int) -> dict:
+        r = self._client.delete(f"/admin/limits/{category_id}")
+        r.raise_for_status()
+        return r.json()
+
     def list_spaces(self) -> list:
         r = self._client.get("/admin/spaces")
         r.raise_for_status()

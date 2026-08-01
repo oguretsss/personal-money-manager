@@ -9,6 +9,7 @@ from models import (
     User,
     ApiToken,
     Category,
+    CategoryLimit,
     Transaction,
     Space,
     SpaceTransfer,
@@ -21,7 +22,7 @@ from models import (
 from schemas import (
     TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem,
     SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
-    CategoryUpdate, SpaceUpdate,
+    CategoryUpdate, CategoryLimitUpdate, SpaceUpdate,
     ApiTokenCreate, ApiTokenCreated,
     InvestmentAssetCreate, InvestmentTradeCreate,
     InvestmentTradeUpdate, InvestmentCashEventCreate,
@@ -59,6 +60,9 @@ DEFAULT_INVESTMENT_ACCOUNT_BROKER = "Deutsche Bank MaxBlue"
 INVESTMENT_ASSET_TYPES = {"stock", "etf", "bond"}
 INVESTMENT_TRADE_SIDES = {"buy", "sell"}
 INVESTMENT_CASH_EVENT_TYPES = {"dividend", "coupon", "fee", "tax"}
+LIMIT_WARNING_PERCENT = 50
+LIMIT_CAUTION_PERCENT = 70
+LIMIT_EXCEEDED_PERCENT = 100
 
 @app.on_event("startup")
 def on_startup():
@@ -80,6 +84,126 @@ def get_or_create_category(session: Session, name: str, tx_type: str) -> Categor
 
 def amount_to_cents(value: float) -> int:
     return int(round(value * 100))
+
+
+def month_bounds(value: datetime) -> tuple[datetime, datetime]:
+    start = value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    end = (start + timedelta(days=32)).replace(day=1)
+    return start, end
+
+
+def resolve_limit_period(year: int | None, month: int | None) -> tuple[datetime, datetime]:
+    if (year is None) != (month is None):
+        raise HTTPException(status_code=400, detail="Year and month must be provided together")
+    if year is None:
+        return month_bounds(datetime.utcnow())
+    try:
+        return month_bounds(datetime(year, month, 1))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid year or month") from exc
+
+
+def build_limit_progress(
+    limit: CategoryLimit,
+    category: Category,
+    spent_cents: int,
+    period_start: datetime,
+) -> dict:
+    percentage = (spent_cents / limit.amount_cents * 100) if limit.amount_cents else 0
+    remaining_cents = max(limit.amount_cents - spent_cents, 0)
+    over_cents = max(spent_cents - limit.amount_cents, 0)
+
+    if percentage >= LIMIT_EXCEEDED_PERCENT:
+        status = "exceeded"
+        threshold = LIMIT_EXCEEDED_PERCENT
+        if over_cents:
+            message = f"Limit exceeded for {category.name} by €{over_cents / 100:.2f}."
+        else:
+            message = f"Monthly limit reached for {category.name}."
+    elif percentage >= LIMIT_CAUTION_PERCENT:
+        status = "caution"
+        threshold = LIMIT_CAUTION_PERCENT
+        message = f"You reached {percentage:.0f}% of the monthly limit for {category.name}."
+    elif percentage >= LIMIT_WARNING_PERCENT:
+        status = "warning"
+        threshold = LIMIT_WARNING_PERCENT
+        message = f"You reached {percentage:.0f}% of the monthly limit for {category.name}."
+    else:
+        status = "safe"
+        threshold = 0
+        message = f"€{remaining_cents / 100:.2f} remains for {category.name} this month."
+
+    return {
+        "id": limit.id,
+        "category_id": category.id,
+        "category": category.name,
+        "limit": limit.amount_cents / 100.0,
+        "spent": spent_cents / 100.0,
+        "remaining": remaining_cents / 100.0,
+        "over_by": over_cents / 100.0,
+        "percentage": round(percentage, 1),
+        "status": status,
+        "threshold": threshold,
+        "message": message,
+        "period": period_start.strftime("%Y-%m"),
+    }
+
+
+def list_category_limit_progress(
+    session: Session,
+    period_start: datetime,
+    period_end: datetime,
+) -> list[dict]:
+    limits = session.exec(
+        select(CategoryLimit, Category)
+        .join(Category, CategoryLimit.category_id == Category.id)
+        .order_by(Category.name)
+    ).all()
+    spent_rows = session.exec(
+        select(Transaction.category_id, func.sum(Transaction.amount_cents))
+        .where(
+            Transaction.type == "expense",
+            Transaction.happened_at >= period_start,
+            Transaction.happened_at < period_end,
+        )
+        .group_by(Transaction.category_id)
+    ).all()
+    spent_by_category = {category_id: int(total or 0) for category_id, total in spent_rows}
+    return [
+        build_limit_progress(
+            limit,
+            category,
+            spent_by_category.get(category.id, 0),
+            period_start,
+        )
+        for limit, category in limits
+    ]
+
+
+def get_category_limit_progress(
+    session: Session,
+    category_id: int,
+    happened_at: datetime,
+) -> dict | None:
+    row = session.exec(
+        select(CategoryLimit, Category)
+        .join(Category, CategoryLimit.category_id == Category.id)
+        .where(CategoryLimit.category_id == category_id)
+    ).first()
+    if not row:
+        return None
+
+    limit, category = row
+    period_start, period_end = month_bounds(happened_at)
+    spent_cents = session.exec(
+        select(func.coalesce(func.sum(Transaction.amount_cents), 0)).where(
+            Transaction.type == "expense",
+            Transaction.category_id == category_id,
+            Transaction.happened_at >= period_start,
+            Transaction.happened_at < period_end,
+        )
+    ).one()
+    return build_limit_progress(limit, category, int(spent_cents or 0), period_start)
 
 
 def quantity_to_micros(value: float) -> int:
@@ -719,7 +843,12 @@ def create_transaction(
     session.add(tx)
     session.commit()
     session.refresh(tx)
-    return {"id": tx.id, "ok": True}
+    limit_status = (
+        get_category_limit_progress(session, tx.category_id, tx.happened_at)
+        if tx.type == "expense"
+        else None
+    )
+    return {"id": tx.id, "ok": True, "limit_status": limit_status}
 
 @app.delete("/transactions/{tx_id}")
 def delete_transaction(
@@ -1096,7 +1225,12 @@ def admin_create_transaction(payload: AdminTransactionCreate, session: Session =
     session.add(tx)
     session.commit()
     session.refresh(tx)
-    return {"id": tx.id, "ok": True}
+    limit_status = (
+        get_category_limit_progress(session, tx.category_id, tx.happened_at)
+        if tx.type == "expense"
+        else None
+    )
+    return {"id": tx.id, "ok": True, "limit_status": limit_status}
 
 
 @app.put("/admin/transactions/{tx_id}", dependencies=[Depends(require_admin)])
@@ -1203,7 +1337,66 @@ def admin_delete_category(cat_id: int, session: Session = Depends(get_session)):
     tx_count = session.exec(select(func.count()).select_from(Transaction).where(Transaction.category_id == cat_id)).one()
     if tx_count > 0:
         raise HTTPException(status_code=400, detail=f"Cannot delete: {tx_count} transactions use this category")
+    category_limit = session.exec(
+        select(CategoryLimit).where(CategoryLimit.category_id == cat_id)
+    ).first()
+    if category_limit:
+        session.delete(category_limit)
     session.delete(cat)
+    session.commit()
+    return {"ok": True}
+
+
+@app.get("/admin/limits", dependencies=[Depends(require_admin)])
+def admin_list_limits(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    month: int | None = Query(default=None, ge=1, le=12),
+    session: Session = Depends(get_session),
+):
+    period_start, period_end = resolve_limit_period(year, month)
+    return list_category_limit_progress(session, period_start, period_end)
+
+
+@app.put("/admin/limits/{category_id}", dependencies=[Depends(require_admin)])
+def admin_set_limit(
+    category_id: int,
+    payload: CategoryLimitUpdate,
+    session: Session = Depends(get_session),
+):
+    category = session.get(Category, category_id)
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    if category.type != "expense":
+        raise HTTPException(status_code=400, detail="Limits can only be set for expense categories")
+
+    amount_cents = amount_to_cents(payload.amount)
+    if amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="Limit must be at least €0.01")
+    category_limit = session.exec(
+        select(CategoryLimit).where(CategoryLimit.category_id == category_id)
+    ).first()
+    if category_limit:
+        category_limit.amount_cents = amount_cents
+        category_limit.updated_at = datetime.utcnow()
+    else:
+        category_limit = CategoryLimit(
+            category_id=category_id,
+            amount_cents=amount_cents,
+        )
+    session.add(category_limit)
+    session.commit()
+    session.refresh(category_limit)
+    return get_category_limit_progress(session, category_id, datetime.utcnow())
+
+
+@app.delete("/admin/limits/{category_id}", dependencies=[Depends(require_admin)])
+def admin_delete_limit(category_id: int, session: Session = Depends(get_session)):
+    category_limit = session.exec(
+        select(CategoryLimit).where(CategoryLimit.category_id == category_id)
+    ).first()
+    if not category_limit:
+        raise HTTPException(status_code=404, detail="Limit not found")
+    session.delete(category_limit)
     session.commit()
     return {"ok": True}
 
