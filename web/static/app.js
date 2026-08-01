@@ -9,6 +9,32 @@ function parseAmount(value) {
     return parseFloat(String(value).replace(',', '.'));
 }
 
+function parseBankAmount(value) {
+    if (typeof value === 'number') return value;
+    const raw = String(value || '').trim();
+    if (!raw) return NaN;
+
+    let normalized = raw
+        .replace(/\u2212/g, '-')
+        .replace(/[\s\u00A0]/g, '')
+        .replace(/[^\d.,+\-]/g, '');
+    if (!/\d/.test(normalized)) return NaN;
+
+    const commaIndex = normalized.lastIndexOf(',');
+    const dotIndex = normalized.lastIndexOf('.');
+    if (commaIndex !== -1 && dotIndex !== -1) {
+        if (commaIndex > dotIndex) {
+            normalized = normalized.replace(/\./g, '').replace(',', '.');
+        } else {
+            normalized = normalized.replace(/,/g, '');
+        }
+    } else if (commaIndex !== -1) {
+        normalized = normalized.replace(',', '.');
+    }
+
+    return Number(normalized);
+}
+
 function parseCsv(text) {
     const rows = [];
     let row = [];
@@ -56,28 +82,33 @@ function normalizeCsvHeader(value) {
     return String(value || '').replace(/^\uFEFF/, '').trim().toLowerCase();
 }
 
-function normalizeCategoryMatchKey(value) {
-    return String(value || '')
-        .normalize('NFKC')
-        .replace(/[\uFE0E\uFE0F\u200B-\u200D\u00A0]/g, ' ')
-        .replace(/\p{Extended_Pictographic}/gu, ' ')
-        .replace(/[^\p{L}\p{N}]+/gu, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .toLowerCase();
-}
-
-function categoryKeysMatch(sourceKey, categoryKey) {
-    if (!sourceKey || !categoryKey) return false;
-    if (sourceKey === categoryKey) return true;
-    return sourceKey.length >= 4
-        && categoryKey.length >= 4
-        && (sourceKey.startsWith(categoryKey) || categoryKey.startsWith(sourceKey));
-}
-
 function parseBankDate(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
+
+    const statementDate = raw.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2}|\d{4})$/);
+    if (statementDate) {
+        const months = {
+            jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+            jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+        };
+        const day = Number(statementDate[1]);
+        const month = months[statementDate[2].toLowerCase()];
+        const shortYear = Number(statementDate[3]);
+        const year = statementDate[3].length === 2
+            ? (shortYear < 70 ? 2000 + shortYear : 1900 + shortYear)
+            : shortYear;
+        if (month === undefined) return '';
+
+        const parsed = new Date(Date.UTC(year, month, day));
+        if (parsed.getUTCFullYear() !== year
+            || parsed.getUTCMonth() !== month
+            || parsed.getUTCDate() !== day) {
+            return '';
+        }
+        return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00`;
+    }
+
     const normalized = raw.replace(' ', 'T');
     const match = normalized.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?/);
     if (match) {
@@ -317,19 +348,6 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
             return parts.join(', ');
         },
 
-        categoryFromCsv(value) {
-            const source = String(value || '').trim();
-            if (!source) return '';
-            const exact = this.expenseCategories().find(c => c.name === source);
-            if (exact) return exact.name;
-            const sourceKey = normalizeCategoryMatchKey(source);
-            const fuzzy = this.expenseCategories().find(c => {
-                const categoryKey = normalizeCategoryMatchKey(c.name);
-                return categoryKeysMatch(sourceKey, categoryKey);
-            });
-            return fuzzy ? fuzzy.name : '';
-        },
-
         allCsvRowsSelected() {
             const eligible = this.csvRows.filter(row => !row.imported);
             return eligible.length > 0 && eligible.every(row => row.selected);
@@ -375,7 +393,6 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
                 const indexes = {
                     startedDate: header.indexOf('started date'),
                     amount: header.indexOf('amount'),
-                    category: header.indexOf('category'),
                     description: header.indexOf('description'),
                 };
                 const missing = [];
@@ -388,7 +405,7 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
 
                 const parsedRows = [];
                 rows.slice(1).forEach((cells, idx) => {
-                    const amount = parseAmount(cells[indexes.amount]);
+                    const amount = parseBankAmount(cells[indexes.amount]);
                     const happenedAt = parseBankDate(cells[indexes.startedDate]);
                     if (!Number.isFinite(amount) || amount === 0 || !happenedAt) {
                         this.csvSkippedInvalidCount++;
@@ -399,17 +416,13 @@ function transactionsPage(initialData, initialCategories, initialUsers) {
                         return;
                     }
 
-                    const csvCategory = indexes.category === -1
-                        ? ''
-                        : String(cells[indexes.category] || '').trim();
                     parsedRows.push({
                         id: `${Date.now()}-${idx}`,
                         selected: true,
                         imported: false,
                         happened_at: happenedAt,
                         amount: Math.abs(amount).toFixed(2),
-                        category_name: this.categoryFromCsv(csvCategory),
-                        csvCategory,
+                        category_name: '',
                         note: indexes.description === -1 ? '' : String(cells[indexes.description] || '').trim(),
                     });
                 });

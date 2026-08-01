@@ -240,7 +240,7 @@
                                     </td>
                                     <td data-label="Category">
                                         <select x-model="row.category_name" :disabled="row.imported">
-                                            <option value="" x-text="row.csvCategory ? 'Select... (' + row.csvCategory + ')' : 'Select...'"></option>
+                                            <option value="">Select...</option>
                                             <template x-for="c in expenseCategories()" :key="c.id">
                                                 <option :value="c.name" x-text="c.name"></option>
                                             </template>
