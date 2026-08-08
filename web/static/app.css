@@ -379,11 +379,6 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
     .modal-overlay { align-items: flex-end; padding: 0; }
     .modal-content { border-radius: 12px 12px 0 0; max-width: 100%; }
     .modal-wide { max-width: 100%; }
-    .import-table { min-width: 0; }
-    .import-table input,
-    .import-table select { max-width: 65%; }
-    .import-table th,
-    .import-table td { padding: 0.35rem 0; }
     .csv-drop-zone {
         flex-direction: column;
         align-items: stretch;
@@ -426,6 +421,30 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
         margin-top: 0.25rem;
     }
     .responsive-table td.actions-cell::before { display: none; }
+
+    /* Fixed desktop columns otherwise make Safari size each import card from
+       the narrow first column, clipping all of its form controls. */
+    .responsive-table.import-table {
+        display: block;
+        width: 100%;
+        min-width: 0;
+        table-layout: auto;
+    }
+    .responsive-table.import-table colgroup { display: none; }
+    .responsive-table.import-table tbody,
+    .responsive-table.import-table tr { width: 100%; }
+    .responsive-table.import-table tr { box-sizing: border-box; }
+    .responsive-table.import-table td {
+        width: 100%;
+        padding: 0.35rem 0;
+        overflow: visible;
+    }
+    .responsive-table.import-table input:not([type="checkbox"]),
+    .responsive-table.import-table select {
+        flex: 0 1 65%;
+        width: 65%;
+        max-width: 65%;
+    }
 }
 
 /* ── Touch-friendly buttons & inputs ────────────────────────────────── */
