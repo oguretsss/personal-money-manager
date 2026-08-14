@@ -1863,3 +1863,73 @@ def admin_monthly_trends(months: int = 12, session: Session = Depends(get_sessio
         })
 
     return result
+
+
+@app.get(
+    "/admin/analytics/average-spending-by-category",
+    dependencies=[Depends(require_admin)],
+)
+def admin_average_spending_by_category(
+    months: int = Query(default=12, ge=1, le=60),
+    session: Session = Depends(get_session),
+):
+    """Return average monthly expenses by category for completed calendar months."""
+    now = datetime.utcnow()
+    period_end = datetime(now.year, now.month, 1)
+    start_month_index = period_end.year * 12 + period_end.month - 1 - months
+    requested_period_start = datetime(
+        start_month_index // 12,
+        start_month_index % 12 + 1,
+        1,
+    )
+
+    earliest_expense_at = session.exec(
+        select(func.min(Transaction.happened_at))
+        .where(
+            Transaction.type == "expense",
+            Transaction.happened_at < period_end,
+        )
+    ).one()
+
+    if earliest_expense_at is None:
+        period_start = period_end
+        available_months = 0
+        rows = []
+    else:
+        first_expense_month = datetime(
+            earliest_expense_at.year,
+            earliest_expense_at.month,
+            1,
+        )
+        period_start = max(requested_period_start, first_expense_month)
+        available_months = (
+            (period_end.year - period_start.year) * 12
+            + period_end.month
+            - period_start.month
+        )
+        rows = session.exec(
+            select(Category.name, func.sum(Transaction.amount_cents))
+            .join(Transaction, Transaction.category_id == Category.id)
+            .where(
+                Category.type == "expense",
+                Transaction.type == "expense",
+                Transaction.happened_at >= period_start,
+                Transaction.happened_at < period_end,
+            )
+            .group_by(Category.id, Category.name)
+            .order_by(func.sum(Transaction.amount_cents).desc())
+        ).all()
+
+    return {
+        "months": available_months,
+        "requested_months": months,
+        "period_start": period_start.date().isoformat(),
+        "period_end_exclusive": period_end.date().isoformat(),
+        "items": [
+            {
+                "category": category,
+                "average": round(total_cents / 100.0 / available_months, 2),
+            }
+            for category, total_cents in rows
+        ],
+    }

@@ -109,6 +109,14 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def get_average_spending_by_category(self, months: int = 12) -> dict:
+        r = self._client.get(
+            "/admin/analytics/average-spending-by-category",
+            params={"months": months},
+        )
+        r.raise_for_status()
+        return r.json()
+
     def list_users(self) -> list:
         r = self._client.get("/admin/users-list")
         r.raise_for_status()

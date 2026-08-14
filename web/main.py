@@ -134,6 +134,10 @@ def dashboard(request: Request, _user: str = Depends(require_login)):
     except httpx.HTTPError:
         trends = []
     try:
+        average_spending = api.get_average_spending_by_category(12)
+    except httpx.HTTPError:
+        average_spending = None
+    try:
         limits = api.list_limits()
     except httpx.HTTPError:
         limits = []
@@ -142,6 +146,7 @@ def dashboard(request: Request, _user: str = Depends(require_login)):
         "summary": summary,
         "users": users,
         "trends": trends,
+        "average_spending": average_spending,
         "limits": limits,
         "messages": get_flashed_messages(request),
     })
@@ -447,6 +452,14 @@ def flash_http_error(request: Request, e: httpx.HTTPError):
 def api_monthly_trends(_user: str = Depends(require_login), months: int = 12):
     try:
         return api.get_monthly_trends(months)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.get("/api/analytics/average-spending-by-category")
+def api_average_spending_by_category(_user: str = Depends(require_login), months: int = 12):
+    try:
+        return api.get_average_spending_by_category(months)
     except httpx.HTTPError as e:
         return _error_json(e)
 

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from pathlib import Path
 import sys
 import tempfile
@@ -30,7 +31,7 @@ from auth import (
 )
 from db import engine
 from main import app
-from models import ApiToken, CategoryLimit, Transaction, User
+from models import ApiToken, Category, CategoryLimit, Transaction, User
 
 
 class ApiAuthenticationTests(unittest.TestCase):
@@ -370,6 +371,134 @@ class ApiAuthenticationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "Limits can only be set for expense categories")
+
+    def test_average_spending_by_category_uses_completed_months(self):
+        self.add_user(1010)
+        now = datetime.utcnow()
+
+        def date_in_month(offset: int) -> datetime:
+            month_index = now.year * 12 + now.month - 1 + offset
+            return datetime(month_index // 12, month_index % 12 + 1, 15, 12)
+
+        with Session(engine) as session:
+            groceries = Category(name="Groceries average test", type="expense")
+            rent = Category(name="Rent average test", type="expense")
+            salary = Category(name="Salary average test", type="income")
+            session.add_all([groceries, rent, salary])
+            session.commit()
+            session.refresh(groceries)
+            session.refresh(rent)
+            session.refresh(salary)
+            session.add_all([
+                Transaction(
+                    type="expense",
+                    amount_cents=12000,
+                    category_id=groceries.id,
+                    happened_at=date_in_month(-1),
+                    created_by_telegram_id=1010,
+                ),
+                Transaction(
+                    type="expense",
+                    amount_cents=6000,
+                    category_id=groceries.id,
+                    happened_at=date_in_month(-12),
+                    created_by_telegram_id=1010,
+                ),
+                Transaction(
+                    type="expense",
+                    amount_cents=120000,
+                    category_id=rent.id,
+                    happened_at=date_in_month(-6),
+                    created_by_telegram_id=1010,
+                ),
+                # The current and 13-month-old expenses must not affect the average.
+                Transaction(
+                    type="expense",
+                    amount_cents=999900,
+                    category_id=groceries.id,
+                    happened_at=date_in_month(0),
+                    created_by_telegram_id=1010,
+                ),
+                Transaction(
+                    type="expense",
+                    amount_cents=999900,
+                    category_id=groceries.id,
+                    happened_at=date_in_month(-13),
+                    created_by_telegram_id=1010,
+                ),
+                Transaction(
+                    type="income",
+                    amount_cents=999900,
+                    category_id=salary.id,
+                    happened_at=date_in_month(-1),
+                    created_by_telegram_id=1010,
+                ),
+            ])
+            session.commit()
+
+        response = self.client.get(
+            "/admin/analytics/average-spending-by-category",
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["months"], 12)
+        self.assertEqual(data["requested_months"], 12)
+        self.assertEqual(
+            data["period_end_exclusive"],
+            datetime(now.year, now.month, 1).date().isoformat(),
+        )
+        self.assertEqual(data["items"], [
+            {"category": "Rent average test", "average": 100.0},
+            {"category": "Groceries average test", "average": 15.0},
+        ])
+
+    def test_average_spending_uses_shorter_available_history(self):
+        self.add_user(1011)
+        now = datetime.utcnow()
+
+        def date_in_month(offset: int) -> datetime:
+            month_index = now.year * 12 + now.month - 1 + offset
+            return datetime(month_index // 12, month_index % 12 + 1, 15, 12)
+
+        with Session(engine) as session:
+            category = Category(name="Short history average test", type="expense")
+            session.add(category)
+            session.commit()
+            session.refresh(category)
+            session.add_all([
+                Transaction(
+                    type="expense",
+                    amount_cents=70000,
+                    category_id=category.id,
+                    happened_at=date_in_month(-7),
+                    created_by_telegram_id=1011,
+                ),
+                # A current-month expense does not extend or affect completed history.
+                Transaction(
+                    type="expense",
+                    amount_cents=999900,
+                    category_id=category.id,
+                    happened_at=date_in_month(0),
+                    created_by_telegram_id=1011,
+                ),
+            ])
+            session.commit()
+
+        response = self.client.get(
+            "/admin/analytics/average-spending-by-category",
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["months"], 7)
+        self.assertEqual(data["requested_months"], 12)
+        self.assertEqual(data["period_start"], date_in_month(-7).replace(day=1).date().isoformat())
+        self.assertEqual(data["items"], [
+            {"category": "Short history average test", "average": 100.0},
+        ])
 
 
 if __name__ == "__main__":
