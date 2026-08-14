@@ -71,6 +71,20 @@ class SpaceUpdate(BaseModel):
     name: str = Field(min_length=1)
 
 
+class IncomeSortAllocationCreate(BaseModel):
+    space_id: int
+    amount: float = Field(gt=0)
+
+
+class IncomeSortTemplateUpdate(BaseModel):
+    allocations: list[IncomeSortAllocationCreate]
+
+
+class IncomeSortApply(BaseModel):
+    allocations: list[IncomeSortAllocationCreate] = Field(min_length=1)
+    save_template: bool = True
+
+
 class ApiTokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
     principal_type: Literal["service", "user"] = "service"

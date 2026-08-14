@@ -1,5 +1,6 @@
 from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select, func
 from datetime import datetime, timedelta, timezone
 import os
@@ -13,6 +14,9 @@ from models import (
     Transaction,
     Space,
     SpaceTransfer,
+    IncomeSortTemplateItem,
+    IncomeSort,
+    IncomeSortAllocation,
     InvestmentAccount,
     InvestmentAsset,
     InvestmentTrade,
@@ -23,6 +27,7 @@ from schemas import (
     TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem,
     SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
     CategoryUpdate, CategoryLimitUpdate, SpaceUpdate,
+    IncomeSortTemplateUpdate, IncomeSortApply,
     ApiTokenCreate, ApiTokenCreated,
     InvestmentAssetCreate, InvestmentTradeCreate,
     InvestmentTradeUpdate, InvestmentCashEventCreate,
@@ -1183,6 +1188,13 @@ def admin_list_transactions(
 
     stmt = stmt.order_by(Transaction.happened_at.desc()).offset((page - 1) * per_page).limit(per_page)
     rows = session.exec(stmt).all()
+    transaction_ids = [tx.id for tx, _ in rows]
+    income_sorts = (
+        session.exec(select(IncomeSort).where(IncomeSort.transaction_id.in_(transaction_ids))).all()
+        if transaction_ids
+        else []
+    )
+    sort_by_transaction = {item.transaction_id: item for item in income_sorts}
 
     return {
         "total": total,
@@ -1198,6 +1210,15 @@ def admin_list_transactions(
                 "happened_at": tx.happened_at.isoformat(),
                 "note": tx.note,
                 "created_by_telegram_id": tx.created_by_telegram_id,
+                "income_sort": (
+                    {
+                        "id": sort_by_transaction[tx.id].id,
+                        "allocated_amount": sort_by_transaction[tx.id].amount_cents / 100.0,
+                        "remaining_amount": (tx.amount_cents - sort_by_transaction[tx.id].amount_cents) / 100.0,
+                    }
+                    if tx.id in sort_by_transaction
+                    else None
+                ),
             }
             for tx, cat_name in rows
         ],
@@ -1238,6 +1259,8 @@ def admin_update_transaction(tx_id: int, payload: TransactionUpdate, session: Se
     tx = session.get(Transaction, tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Not found")
+    if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx_id)).first():
+        raise HTTPException(status_code=409, detail="Undo the income sort before editing this transaction")
 
     if payload.amount is not None:
         tx.amount_cents = int(round(payload.amount * 100))
@@ -1259,7 +1282,169 @@ def admin_delete_transaction(tx_id: int, session: Session = Depends(get_session)
     tx = session.get(Transaction, tx_id)
     if not tx:
         raise HTTPException(status_code=404, detail="Not found")
+    if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx_id)).first():
+        raise HTTPException(status_code=409, detail="Undo the income sort before deleting this transaction")
     session.delete(tx)
+    session.commit()
+    return {"ok": True}
+
+
+def validate_income_sort_allocations(session: Session, allocations) -> list[tuple[Space, int]]:
+    seen_space_ids: set[int] = set()
+    validated: list[tuple[Space, int]] = []
+    for allocation in allocations:
+        if allocation.space_id in seen_space_ids:
+            raise HTTPException(status_code=400, detail="A space can only appear once in an income sort")
+        seen_space_ids.add(allocation.space_id)
+
+        space = session.get(Space, allocation.space_id)
+        if not space:
+            raise HTTPException(status_code=400, detail=f"Space {allocation.space_id} does not exist")
+        amount_cents = int(round(allocation.amount * 100))
+        if amount_cents <= 0:
+            raise HTTPException(status_code=400, detail="Every allocation must be at least 0.01")
+        validated.append((space, amount_cents))
+    return validated
+
+
+def replace_income_sort_template(
+    session: Session,
+    telegram_id: int,
+    allocations: list[tuple[Space, int]],
+) -> None:
+    existing = session.exec(
+        select(IncomeSortTemplateItem).where(
+            IncomeSortTemplateItem.created_by_telegram_id == telegram_id
+        )
+    ).all()
+    for item in existing:
+        session.delete(item)
+    session.flush()
+
+    now = datetime.utcnow()
+    for space, amount_cents in allocations:
+        session.add(IncomeSortTemplateItem(
+            created_by_telegram_id=telegram_id,
+            space_id=space.id,
+            amount_cents=amount_cents,
+            updated_at=now,
+        ))
+
+
+@app.get("/admin/income-sort/templates/{telegram_id}", dependencies=[Depends(require_admin)])
+def admin_get_income_sort_template(telegram_id: int, session: Session = Depends(get_session)):
+    rows = session.exec(
+        select(IncomeSortTemplateItem, Space.name)
+        .join(Space, IncomeSortTemplateItem.space_id == Space.id)
+        .where(IncomeSortTemplateItem.created_by_telegram_id == telegram_id)
+        .order_by(Space.name)
+    ).all()
+    return {
+        "created_by_telegram_id": telegram_id,
+        "allocations": [
+            {"space_id": item.space_id, "space_name": space_name, "amount": item.amount_cents / 100.0}
+            for item, space_name in rows
+        ],
+    }
+
+
+@app.put("/admin/income-sort/templates/{telegram_id}", dependencies=[Depends(require_admin)])
+def admin_update_income_sort_template(
+    telegram_id: int,
+    payload: IncomeSortTemplateUpdate,
+    session: Session = Depends(get_session),
+):
+    allocations = validate_income_sort_allocations(session, payload.allocations)
+    replace_income_sort_template(session, telegram_id, allocations)
+    session.commit()
+    return {"ok": True, "allocation_count": len(allocations)}
+
+
+@app.post("/admin/transactions/{tx_id}/income-sort", dependencies=[Depends(require_admin)])
+def admin_sort_income_transaction(
+    tx_id: int,
+    payload: IncomeSortApply,
+    session: Session = Depends(get_session),
+):
+    transaction = session.get(Transaction, tx_id)
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if transaction.type != "income":
+        raise HTTPException(status_code=400, detail="Only income transactions can be sorted")
+    if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx_id)).first():
+        raise HTTPException(status_code=409, detail="This income has already been sorted")
+
+    allocations = validate_income_sort_allocations(session, payload.allocations)
+    allocated_cents = sum(amount_cents for _, amount_cents in allocations)
+    if allocated_cents > transaction.amount_cents:
+        raise HTTPException(status_code=400, detail="Allocated amount cannot exceed the income amount")
+
+    try:
+        income_sort = IncomeSort(
+            transaction_id=transaction.id,
+            created_by_telegram_id=transaction.created_by_telegram_id,
+            amount_cents=allocated_cents,
+        )
+        session.add(income_sort)
+        session.flush()
+
+        for space, amount_cents in allocations:
+            transfer = SpaceTransfer(
+                space_id=space.id,
+                amount_cents=amount_cents,
+                direction="to_space",
+                happened_at=transaction.happened_at,
+                note=f"Income sort for transaction #{transaction.id}",
+                created_by_telegram_id=transaction.created_by_telegram_id,
+            )
+            session.add(transfer)
+            session.flush()
+            session.add(IncomeSortAllocation(
+                income_sort_id=income_sort.id,
+                space_id=space.id,
+                space_transfer_id=transfer.id,
+                amount_cents=amount_cents,
+            ))
+
+        if payload.save_template:
+            replace_income_sort_template(
+                session,
+                transaction.created_by_telegram_id,
+                allocations,
+            )
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="This income has already been sorted")
+
+    return {
+        "ok": True,
+        "income_sort_id": income_sort.id,
+        "allocated_amount": allocated_cents / 100.0,
+        "remaining_amount": (transaction.amount_cents - allocated_cents) / 100.0,
+        "allocation_count": len(allocations),
+    }
+
+
+@app.delete("/admin/transactions/{tx_id}/income-sort", dependencies=[Depends(require_admin)])
+def admin_undo_income_sort(tx_id: int, session: Session = Depends(get_session)):
+    income_sort = session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx_id)).first()
+    if not income_sort:
+        raise HTTPException(status_code=404, detail="Income sort not found")
+
+    allocations = session.exec(
+        select(IncomeSortAllocation).where(IncomeSortAllocation.income_sort_id == income_sort.id)
+    ).all()
+    transfer_ids = [allocation.space_transfer_id for allocation in allocations]
+    for allocation in allocations:
+        session.delete(allocation)
+    session.flush()
+    for transfer_id in transfer_ids:
+        transfer = session.get(SpaceTransfer, transfer_id)
+        if transfer:
+            session.delete(transfer)
+    session.flush()
+    session.delete(income_sort)
     session.commit()
     return {"ok": True}
 
@@ -1451,6 +1636,11 @@ def admin_delete_space(space_id: int, session: Session = Depends(get_session)):
     tr_count = session.exec(select(func.count()).select_from(SpaceTransfer).where(SpaceTransfer.space_id == space_id)).one()
     if tr_count > 0:
         raise HTTPException(status_code=400, detail=f"Cannot delete: {tr_count} transfers reference this space")
+    template_items = session.exec(
+        select(IncomeSortTemplateItem).where(IncomeSortTemplateItem.space_id == space_id)
+    ).all()
+    for item in template_items:
+        session.delete(item)
     session.delete(sp)
     session.commit()
     return {"ok": True}

@@ -7,11 +7,13 @@ A family budget management system with a FastAPI backend, Telegram bot frontend,
 - **Transaction Tracking** - Record income and expenses with categories and notes
 - **Financial Summaries** - View monthly breakdowns by category with cash balance
 - **Savings Spaces** - Create virtual containers to organize savings goals
+- **Income Sorter** - Distribute an income transaction across Spaces with reusable per-user templates
 - **Telegram Interface** - Manage finances directly from Telegram
 - **Quick Entry** - Send just a number to quickly add an expense
 - **Web Admin Panel** - Mobile-friendly reactive UI for managing all data
   - Dashboard with expense pie chart, financial summary, and monthly category-limit progress
   - Transaction management with add/edit/delete (no page reloads)
+  - One-step income sorting with allocation preview, cash remainder, saved templates, and undo
   - Quick expense button (FAB) accessible from every page
   - Responsive design — tables convert to cards on mobile
   - Categories, monthly spending limits, and spaces management with inline editing
@@ -196,6 +198,8 @@ restart `api`, `bot`, and `web` together.
 | `GET` | `/spaces` | List savings spaces |
 | `POST` | `/spaces/transfer` | Transfer to/from space |
 | `POST` | `/admin/users` | Manage users (admin) |
+| `GET/PUT` | `/admin/income-sort/templates/{telegram_id}` | Read or update a user's income-sort template (admin) |
+| `POST/DELETE` | `/admin/transactions/{id}/income-sort` | Apply or undo an income sort (admin) |
 
 ## Bot Commands
 

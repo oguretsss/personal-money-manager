@@ -43,6 +43,26 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def get_income_sort_template(self, telegram_id: int) -> dict:
+        r = self._client.get(f"/admin/income-sort/templates/{telegram_id}")
+        r.raise_for_status()
+        return r.json()
+
+    def update_income_sort_template(self, telegram_id: int, data: dict) -> dict:
+        r = self._client.put(f"/admin/income-sort/templates/{telegram_id}", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def sort_income_transaction(self, tx_id: int, data: dict) -> dict:
+        r = self._client.post(f"/admin/transactions/{tx_id}/income-sort", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def undo_income_sort(self, tx_id: int) -> dict:
+        r = self._client.delete(f"/admin/transactions/{tx_id}/income-sort")
+        r.raise_for_status()
+        return r.json()
+
     def list_categories(self) -> list:
         r = self._client.get("/admin/categories")
         r.raise_for_status()

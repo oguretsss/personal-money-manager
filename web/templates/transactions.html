@@ -2,8 +2,8 @@
 {% set active = "transactions" %}
 {% block title %}Transactions - MoneyManage Admin{% endblock %}
 {% block content %}
-<script id="tx-init-data" type="application/json">{{ {"data": data, "categories": categories, "users": users, "limits": limits} | tojson }}</script>
-<div x-data="(() => { const d = JSON.parse(document.getElementById('tx-init-data').textContent); return transactionsPage(d.data, d.categories, d.users, d.limits); })()">
+<script id="tx-init-data" type="application/json">{{ {"data": data, "categories": categories, "users": users, "limits": limits, "spaces": spaces} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('tx-init-data').textContent); return transactionsPage(d.data, d.categories, d.users, d.limits, d.spaces); })()">
 <h2>Transactions</h2>
 
 <!-- Filters -->
@@ -61,6 +61,66 @@
 <div class="page-actions">
     <button @click="openAdd()">+ Add Transaction</button>
     <button @click="openCsvImport()" class="secondary">Import Expenses CSV</button>
+</div>
+
+<!-- Income Sort Modal -->
+<div x-show="showIncomeSort" x-cloak class="modal-overlay" @click.self="showIncomeSort = false">
+    <div class="modal-content modal-wide">
+        <h3>Sort Income</h3>
+        <template x-if="incomeSortTransaction">
+            <div>
+                <div class="income-sort-heading">
+                    <div>
+                        <span class="income-sort-label">Income</span>
+                        <strong x-text="formatMoney(incomeSortTransaction.amount)"></strong>
+                    </div>
+                    <div>
+                        <span class="income-sort-label">User</span>
+                        <strong x-text="incomeSortUserName()"></strong>
+                    </div>
+                    <div>
+                        <span class="income-sort-label">Date</span>
+                        <strong x-text="String(incomeSortTransaction.happened_at || '').slice(0, 10)"></strong>
+                    </div>
+                </div>
+
+                <p class="income-sort-hint">
+                    Enter how much to deposit into each Space. Any remainder stays in cash.
+                    Templates are saved separately for each user.
+                </p>
+
+                <div class="income-sort-grid">
+                    <template x-for="allocation in incomeSortAllocations" :key="allocation.space_id">
+                        <label class="income-sort-row">
+                            <span x-text="allocation.space_name"></span>
+                            <input type="text" inputmode="decimal" x-model="allocation.amount"
+                                   placeholder="0.00" aria-label="Allocation amount">
+                        </label>
+                    </template>
+                </div>
+
+                <div class="income-sort-totals" :class="{ 'is-invalid': incomeSortRemaining() < 0 }">
+                    <div><span>Allocated</span><strong x-text="formatMoney(incomeSortAllocated())"></strong></div>
+                    <div><span>Stays in cash</span><strong x-text="formatMoney(incomeSortRemaining())"></strong></div>
+                </div>
+
+                <p class="income-sort-error" x-show="incomeSortValidationMessage()"
+                   x-text="incomeSortValidationMessage()"></p>
+
+                <label class="inline-check income-sort-save-option">
+                    <input type="checkbox" x-model="saveIncomeSortTemplate">
+                    Save these amounts as this user's template
+                </label>
+            </div>
+        </template>
+        <div class="form-actions">
+            <button @click="showIncomeSort = false" class="secondary">Cancel</button>
+            <button @click="saveCurrentIncomeSortTemplate()" class="secondary" :disabled="loading || !!incomeSortValidationMessage()"
+                    x-text="loading ? 'Saving...' : 'Save Template'"></button>
+            <button @click="submitIncomeSort()" :disabled="loading || !!incomeSortValidationMessage()"
+                    x-text="loading ? 'Sorting...' : 'Sort Income'"></button>
+        </div>
+    </div>
 </div>
 
 <!-- Add Transaction Modal -->
@@ -283,6 +343,18 @@
     </div>
 </div>
 
+<!-- Undo Income Sort Confirmation -->
+<div x-show="showUndoSortConfirm" x-cloak class="confirm-overlay" @click.self="showUndoSortConfirm = false">
+    <div class="confirm-box">
+        <p>Undo this income sort? The linked deposits will be removed from Spaces.</p>
+        <div class="confirm-actions">
+            <button @click="showUndoSortConfirm = false" class="secondary">Cancel</button>
+            <button @click="doUndoIncomeSort()" :disabled="loading" class="btn-danger"
+                    x-text="loading ? 'Undoing...' : 'Undo Sort'"></button>
+        </div>
+    </div>
+</div>
+
 <!-- Transactions Table -->
 <table class="responsive-table">
     <thead>
@@ -304,8 +376,16 @@
         <td data-label="Amount" class="amount {% if tx.type == 'income' %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(tx.amount) }}</td>
         <td data-label="Note">{{ tx.note }}</td>
         <td class="actions-cell">
+            {% if tx.type == 'income' and not tx.income_sort %}
+            <button class="btn-sm btn-sort" @click="openIncomeSort(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Sort</button>
+            {% endif %}
+            {% if tx.income_sort %}
+            <span class="income-sort-badge">Sorted &euro;{{ "%.2f"|format(tx.income_sort.allocated_amount) }}</span>
+            <button class="btn-sm btn-danger" @click="confirmUndoIncomeSort({{ tx.id }})">Undo sort</button>
+            {% else %}
             <button class="btn-sm" @click="openEdit(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Edit</button>
             <button class="btn-sm btn-danger" @click="confirmDelete({{ tx.id }})">Delete</button>
+            {% endif %}
         </td>
     </tr>
     {% endfor %}

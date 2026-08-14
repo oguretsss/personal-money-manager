@@ -179,10 +179,12 @@ def transactions_page(
         data = api.list_transactions(**params)
         categories = api.list_categories()
         users = api.list_users()
+        spaces = api.list_spaces()
     except httpx.HTTPError:
         data = {"items": [], "total": 0, "page": 1, "per_page": 50}
         categories = []
         users = []
+        spaces = []
     try:
         limits = api.list_limits()
     except httpx.HTTPError:
@@ -192,6 +194,7 @@ def transactions_page(
         "data": data,
         "categories": categories,
         "users": users,
+        "spaces": spaces,
         "limits": limits,
         "filter_type": type,
         "filter_category": category,
@@ -513,6 +516,46 @@ def api_update_transaction(tx_id: int, _user: str = Depends(require_login), data
 def api_delete_transaction(tx_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_transaction(tx_id)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.get("/api/income-sort/templates/{telegram_id}")
+def api_get_income_sort_template(telegram_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.get_income_sort_template(telegram_id)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.put("/api/income-sort/templates/{telegram_id}")
+def api_update_income_sort_template(
+    telegram_id: int,
+    _user: str = Depends(require_login),
+    data: dict = Body(),
+):
+    try:
+        return api.update_income_sort_template(telegram_id, data)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.post("/api/transactions/{tx_id}/income-sort")
+def api_sort_income_transaction(
+    tx_id: int,
+    _user: str = Depends(require_login),
+    data: dict = Body(),
+):
+    try:
+        return api.sort_income_transaction(tx_id, data)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/transactions/{tx_id}/income-sort")
+def api_undo_income_sort(tx_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.undo_income_sort(tx_id)
     except httpx.HTTPError as e:
         return _error_json(e)
 

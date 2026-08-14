@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import SQLModel, Field
 
 class User(SQLModel, table=True):
@@ -60,6 +61,34 @@ class SpaceTransfer(SQLModel, table=True):
     happened_at: datetime = Field(default_factory=datetime.utcnow, index=True)
     note: str = ""
     created_by_telegram_id: int = Field(index=True)
+
+
+class IncomeSortTemplateItem(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint("created_by_telegram_id", "space_id", name="uq_income_sort_template_user_space"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_by_telegram_id: int = Field(index=True)
+    space_id: int = Field(foreign_key="space.id", index=True)
+    amount_cents: int
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class IncomeSort(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    transaction_id: int = Field(foreign_key="transaction.id", index=True, unique=True)
+    created_by_telegram_id: int = Field(index=True)
+    amount_cents: int
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class IncomeSortAllocation(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    income_sort_id: int = Field(foreign_key="incomesort.id", index=True)
+    space_id: int = Field(foreign_key="space.id", index=True)
+    space_transfer_id: int = Field(foreign_key="spacetransfer.id", index=True, unique=True)
+    amount_cents: int
 
 
 class InvestmentAccount(SQLModel, table=True):

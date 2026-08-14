@@ -335,7 +335,7 @@ function fabExpense() {
 
 /* ── Transactions page component ────────────────────────────────────── */
 
-function transactionsPage(initialData, initialCategories, initialUsers, initialLimits = []) {
+function transactionsPage(initialData, initialCategories, initialUsers, initialLimits = [], initialSpaces = []) {
     return {
         transactions: initialData.items || [],
         total: initialData.total || 0,
@@ -344,6 +344,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         categories: initialCategories || [],
         users: initialUsers || [],
         limits: initialLimits || [],
+        spaces: initialSpaces || [],
         csvRows: [],
         csvErrors: [],
         csvFileName: '',
@@ -374,6 +375,14 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         showConfirm: false,
         confirmId: null,
 
+        // Income sorter
+        showIncomeSort: false,
+        incomeSortTransaction: null,
+        incomeSortAllocations: [],
+        saveIncomeSortTemplate: true,
+        showUndoSortConfirm: false,
+        undoSortId: null,
+
         loading: false,
 
         init() {
@@ -387,6 +396,148 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
 
         expenseCategories() {
             return this.categories.filter(c => c.type === 'expense');
+        },
+
+        formatMoney,
+
+        incomeSortUserName() {
+            if (!this.incomeSortTransaction) return '';
+            const user = this.users.find(
+                item => Number(item.telegram_id) === Number(this.incomeSortTransaction.created_by_telegram_id),
+            );
+            return user ? user.name : String(this.incomeSortTransaction.created_by_telegram_id);
+        },
+
+        incomeSortPayload() {
+            return this.incomeSortAllocations
+                .map(allocation => ({
+                    space_id: allocation.space_id,
+                    amount: parseAmount(allocation.amount),
+                }))
+                .filter(allocation => Number.isFinite(allocation.amount) && allocation.amount > 0)
+                .map(allocation => ({
+                    space_id: allocation.space_id,
+                    amount: Math.round(allocation.amount * 100) / 100,
+                }));
+        },
+
+        incomeSortAllocated() {
+            const cents = this.incomeSortPayload().reduce(
+                (total, allocation) => total + Math.round(allocation.amount * 100),
+                0,
+            );
+            return cents / 100;
+        },
+
+        incomeSortRemaining() {
+            if (!this.incomeSortTransaction) return 0;
+            const incomeCents = Math.round(Number(this.incomeSortTransaction.amount || 0) * 100);
+            const allocatedCents = Math.round(this.incomeSortAllocated() * 100);
+            return (incomeCents - allocatedCents) / 100;
+        },
+
+        incomeSortValidationMessage() {
+            if (!this.incomeSortTransaction) return 'No income selected.';
+            const invalid = this.incomeSortAllocations.some(allocation => {
+                const raw = String(allocation.amount ?? '').trim();
+                if (!raw) return false;
+                const amount = parseAmount(raw);
+                return !Number.isFinite(amount) || amount < 0;
+            });
+            if (invalid) return 'Every amount must be zero or a positive number.';
+            if (!this.incomeSortPayload().length) return 'Enter an amount for at least one Space.';
+            if (this.incomeSortRemaining() < 0) return 'Allocated amount cannot exceed this income.';
+            return '';
+        },
+
+        async openIncomeSort(transaction) {
+            if (!this.spaces.length) {
+                Alpine.store('toast').add('Create a Space before sorting income', 'error');
+                return;
+            }
+            this.incomeSortTransaction = transaction;
+            this.incomeSortAllocations = this.spaces.map(space => ({
+                space_id: space.id,
+                space_name: space.name,
+                amount: '',
+            }));
+            this.saveIncomeSortTemplate = true;
+            this.showIncomeSort = true;
+            this.loading = true;
+            const template = await apiCall(
+                'GET',
+                `/api/income-sort/templates/${transaction.created_by_telegram_id}`,
+            );
+            this.loading = false;
+            if (!template) return;
+            const amountBySpace = new Map(
+                (template.allocations || []).map(item => [Number(item.space_id), Number(item.amount)]),
+            );
+            this.incomeSortAllocations.forEach(allocation => {
+                if (amountBySpace.has(Number(allocation.space_id))) {
+                    allocation.amount = amountBySpace.get(Number(allocation.space_id)).toFixed(2);
+                }
+            });
+        },
+
+        async saveCurrentIncomeSortTemplate() {
+            const validationError = this.incomeSortValidationMessage();
+            if (validationError) {
+                Alpine.store('toast').add(validationError, 'error');
+                return;
+            }
+            this.loading = true;
+            const result = await apiCall(
+                'PUT',
+                `/api/income-sort/templates/${this.incomeSortTransaction.created_by_telegram_id}`,
+                { allocations: this.incomeSortPayload() },
+            );
+            this.loading = false;
+            if (result) Alpine.store('toast').add('Income sort template saved', 'success');
+        },
+
+        async submitIncomeSort() {
+            const validationError = this.incomeSortValidationMessage();
+            if (validationError) {
+                Alpine.store('toast').add(validationError, 'error');
+                return;
+            }
+            this.loading = true;
+            const result = await apiCall(
+                'POST',
+                `/api/transactions/${this.incomeSortTransaction.id}/income-sort`,
+                {
+                    allocations: this.incomeSortPayload(),
+                    save_template: this.saveIncomeSortTemplate,
+                },
+            );
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add(
+                    `Income sorted: ${formatMoney(result.allocated_amount)} allocated`,
+                    'success',
+                );
+                this.showIncomeSort = false;
+                Alpine.store('app').invalidate();
+                window.location.reload();
+            }
+        },
+
+        confirmUndoIncomeSort(id) {
+            this.undoSortId = id;
+            this.showUndoSortConfirm = true;
+        },
+
+        async doUndoIncomeSort() {
+            this.loading = true;
+            const result = await apiCall('DELETE', `/api/transactions/${this.undoSortId}/income-sort`);
+            this.loading = false;
+            if (result) {
+                Alpine.store('toast').add('Income sort undone', 'success');
+                this.showUndoSortConfirm = false;
+                Alpine.store('app').invalidate();
+                window.location.reload();
+            }
         },
 
         openAdd() {

@@ -109,3 +109,44 @@ test('does not show a stale limit preview for a transaction in another month', (
 
     assert.equal(preview, null);
 });
+
+test('income sorter builds allocations and keeps the unallocated income in cash', () => {
+    const app = loadAppScript();
+    const page = app.transactionsPage(
+        { items: [] },
+        [],
+        [{ telegram_id: 123, name: 'Test User' }],
+        [],
+        [
+            { id: 1, name: 'Savings' },
+            { id: 2, name: 'Vacation' },
+            { id: 3, name: 'Unused' },
+        ],
+    );
+    page.incomeSortTransaction = {
+        id: 10,
+        amount: 1000,
+        created_by_telegram_id: 123,
+    };
+    page.incomeSortAllocations = [
+        { space_id: 1, space_name: 'Savings', amount: '300.10' },
+        { space_id: 2, space_name: 'Vacation', amount: '200,20' },
+        { space_id: 3, space_name: 'Unused', amount: '' },
+    ];
+
+    assert.deepEqual(
+        JSON.parse(JSON.stringify(page.incomeSortPayload())),
+        [
+            { space_id: 1, amount: 300.1 },
+            { space_id: 2, amount: 200.2 },
+        ],
+    );
+    assert.equal(page.incomeSortAllocated(), 500.3);
+    assert.equal(page.incomeSortRemaining(), 499.7);
+    assert.equal(page.incomeSortValidationMessage(), '');
+    assert.equal(page.incomeSortUserName(), 'Test User');
+
+    page.incomeSortAllocations[0].amount = '1000.01';
+    page.incomeSortAllocations[1].amount = '';
+    assert.equal(page.incomeSortValidationMessage(), 'Allocated amount cannot exceed this income.');
+});

@@ -176,6 +176,87 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 .modal-content h3 { margin-top: 0; }
 .modal-wide { max-width: 1100px; }
 
+/* Income sorter */
+.income-sort-heading {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+.income-sort-heading > div {
+    padding: 0.75rem;
+    border: 1px solid #37474f;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.025);
+}
+.income-sort-label {
+    display: block;
+    margin-bottom: 0.15rem;
+    color: #90a4ae;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.income-sort-hint { color: #b0bec5; font-size: 0.9rem; }
+.income-sort-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem 1rem;
+}
+.income-sort-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0;
+    padding: 0.55rem 0.7rem;
+    border: 1px solid #303840;
+    border-radius: 7px;
+}
+.income-sort-row span { min-width: 0; overflow-wrap: anywhere; }
+.income-sort-row input {
+    flex: 0 0 130px;
+    width: 130px;
+    margin: 0;
+    text-align: right;
+}
+.income-sort-totals {
+    display: flex;
+    justify-content: flex-end;
+    gap: 2rem;
+    margin-top: 1rem;
+    padding: 0.85rem 1rem;
+    border-radius: 8px;
+    background: rgba(46, 125, 50, 0.14);
+}
+.income-sort-totals > div { display: flex; flex-direction: column; text-align: right; }
+.income-sort-totals span { color: #b0bec5; font-size: 0.8rem; }
+.income-sort-totals.is-invalid { background: rgba(183, 28, 28, 0.18); }
+.income-sort-error { margin: 0.6rem 0 0; color: #ef9a9a; font-size: 0.9rem; }
+.income-sort-save-option { margin-top: 1rem; }
+.income-sort-badge {
+    display: inline-flex;
+    align-items: center;
+    min-height: 36px;
+    padding: 0.25rem 0.65rem;
+    border-radius: 999px;
+    background: #174f2a;
+    color: #b9f6ca;
+    font-size: 0.78rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.btn-sort { color: #81d4fa; border-color: #0288d1; }
+.btn-sort:hover { background: #01579b; color: #fff; }
+
+@media (max-width: 768px) {
+    .income-sort-heading,
+    .income-sort-grid { grid-template-columns: 1fr; }
+    .income-sort-totals { justify-content: space-between; gap: 1rem; }
+    .income-sort-totals > div:first-child { text-align: left; }
+    .income-sort-row input { flex-basis: 115px; width: 115px; }
+}
+
 .visually-hidden {
     position: absolute;
     width: 1px;
