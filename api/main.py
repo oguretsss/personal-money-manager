@@ -1,3 +1,4 @@
+from calendar import monthrange
 from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
@@ -12,6 +13,8 @@ from models import (
     Category,
     CategoryLimit,
     Transaction,
+    Subscription,
+    SubscriptionPayment,
     Space,
     SpaceTransfer,
     IncomeSortTemplateItem,
@@ -26,6 +29,7 @@ from models import (
 from schemas import (
     TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem,
     SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
+    SubscriptionCreate, SubscriptionUpdate, SubscriptionPay,
     CategoryUpdate, CategoryLimitUpdate, SpaceUpdate,
     IncomeSortTemplateUpdate, IncomeSortApply,
     ApiTokenCreate, ApiTokenCreated,
@@ -1284,9 +1288,330 @@ def admin_delete_transaction(tx_id: int, session: Session = Depends(get_session)
         raise HTTPException(status_code=404, detail="Not found")
     if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx_id)).first():
         raise HTTPException(status_code=409, detail="Undo the income sort before deleting this transaction")
+    subscription_payment = session.exec(
+        select(SubscriptionPayment).where(SubscriptionPayment.transaction_id == tx_id)
+    ).first()
+    if subscription_payment:
+        session.delete(subscription_payment)
     session.delete(tx)
     session.commit()
     return {"ok": True}
+
+
+def resolve_subscription_period(
+    year: int | None,
+    month: int | None,
+) -> tuple[datetime, datetime]:
+    return resolve_limit_period(year, month)
+
+
+def validate_subscription_references(
+    session: Session,
+    category_id: int,
+    telegram_id: int,
+) -> tuple[Category, User]:
+    category = session.get(Category, category_id)
+    if not category:
+        raise HTTPException(status_code=400, detail="Category not found")
+    if category.type != "expense":
+        raise HTTPException(status_code=400, detail="Subscriptions require an expense category")
+
+    user = session.exec(select(User).where(User.telegram_id == telegram_id)).first()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=400, detail="Active user not found")
+    return category, user
+
+
+def subscription_status(
+    subscription: Subscription,
+    payment: SubscriptionPayment | None,
+    period_start: datetime,
+    period_end: datetime,
+    current_period_start: datetime,
+) -> str:
+    if payment:
+        return "paid"
+    if subscription.created_at >= period_end:
+        return "not_started"
+    if period_start > current_period_start:
+        return "upcoming"
+    if period_start == current_period_start:
+        return "not_paid"
+    return "missed"
+
+
+def list_subscriptions_for_period(
+    session: Session,
+    period_start: datetime,
+    period_end: datetime,
+) -> dict:
+    rows = session.exec(
+        select(Subscription, Category.name, User.name)
+        .join(Category, Subscription.category_id == Category.id)
+        .join(User, Subscription.created_by_telegram_id == User.telegram_id)
+        .order_by(Subscription.name)
+    ).all()
+    payments = session.exec(
+        select(SubscriptionPayment).where(
+            SubscriptionPayment.period_year == period_start.year,
+            SubscriptionPayment.period_month == period_start.month,
+        )
+    ).all()
+    payments_by_subscription = {payment.subscription_id: payment for payment in payments}
+    current_period_start, _ = month_bounds(datetime.utcnow())
+    items = []
+
+    for subscription, category_name, user_name in rows:
+        payment = payments_by_subscription.get(subscription.id)
+        status = subscription_status(
+            subscription,
+            payment,
+            period_start,
+            period_end,
+            current_period_start,
+        )
+        items.append({
+            "id": subscription.id,
+            "name": subscription.name,
+            "amount": subscription.amount_cents / 100.0,
+            "category_id": subscription.category_id,
+            "category": category_name,
+            "created_by_telegram_id": subscription.created_by_telegram_id,
+            "user_name": user_name,
+            "due_day": subscription.due_day,
+            "note": subscription.note,
+            "created_at": subscription.created_at.isoformat(),
+            "updated_at": subscription.updated_at.isoformat(),
+            "status": status,
+            "payment": (
+                {
+                    "id": payment.id,
+                    "transaction_id": payment.transaction_id,
+                    "paid_at": payment.paid_at.isoformat(),
+                }
+                if payment
+                else None
+            ),
+        })
+
+    status_order = {"missed": 0, "not_paid": 1, "upcoming": 2, "paid": 3, "not_started": 4}
+    items.sort(key=lambda item: (status_order[item["status"]], item["name"].lower()))
+    due_items = [item for item in items if item["status"] != "not_started"]
+    paid_items = [item for item in due_items if item["status"] == "paid"]
+    outstanding_items = [item for item in due_items if item["status"] in {"not_paid", "missed"}]
+    previous_missed = None
+    if period_start == current_period_start:
+        previous_period_end = current_period_start
+        previous_period_start, _ = month_bounds(previous_period_end - timedelta(days=1))
+        previous_payments = session.exec(
+            select(SubscriptionPayment).where(
+                SubscriptionPayment.period_year == previous_period_start.year,
+                SubscriptionPayment.period_month == previous_period_start.month,
+            )
+        ).all()
+        paid_subscription_ids = {payment.subscription_id for payment in previous_payments}
+        missed_items = [
+            {
+                "id": subscription.id,
+                "name": subscription.name,
+                "amount": subscription.amount_cents / 100.0,
+            }
+            for subscription, _, _ in rows
+            if subscription.created_at < previous_period_end
+            and subscription.id not in paid_subscription_ids
+        ]
+        previous_missed = {
+            "period": previous_period_start.strftime("%Y-%m"),
+            "count": len(missed_items),
+            "amount": sum(item["amount"] for item in missed_items),
+            "items": missed_items,
+        }
+
+    return {
+        "period": period_start.strftime("%Y-%m"),
+        "is_current": period_start == current_period_start,
+        "items": items,
+        "previous_missed": previous_missed,
+        "summary": {
+            "total": len(due_items),
+            "paid": len(paid_items),
+            "outstanding": len(outstanding_items),
+            "missed": sum(item["status"] == "missed" for item in due_items),
+            "expected_amount": sum(item["amount"] for item in due_items),
+            "paid_amount": sum(item["amount"] for item in paid_items),
+            "outstanding_amount": sum(item["amount"] for item in outstanding_items),
+        },
+    }
+
+
+@app.get("/admin/subscriptions", dependencies=[Depends(require_admin)])
+def admin_list_subscriptions(
+    year: int | None = Query(default=None, ge=2000, le=2100),
+    month: int | None = Query(default=None, ge=1, le=12),
+    session: Session = Depends(get_session),
+):
+    period_start, period_end = resolve_subscription_period(year, month)
+    return list_subscriptions_for_period(session, period_start, period_end)
+
+
+@app.post("/admin/subscriptions", dependencies=[Depends(require_admin)])
+def admin_create_subscription(
+    payload: SubscriptionCreate,
+    session: Session = Depends(get_session),
+):
+    validate_subscription_references(
+        session,
+        payload.category_id,
+        payload.created_by_telegram_id,
+    )
+    name = payload.name.strip()
+    amount_cents = amount_to_cents(payload.amount)
+    if not name:
+        raise HTTPException(status_code=400, detail="Subscription name is required")
+    if amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="Subscription amount must be at least 0.01")
+    subscription = Subscription(
+        name=name,
+        amount_cents=amount_cents,
+        category_id=payload.category_id,
+        created_by_telegram_id=payload.created_by_telegram_id,
+        due_day=payload.due_day,
+        note=payload.note.strip(),
+    )
+    session.add(subscription)
+    session.commit()
+    session.refresh(subscription)
+    return {"id": subscription.id, "ok": True}
+
+
+@app.put("/admin/subscriptions/{subscription_id}", dependencies=[Depends(require_admin)])
+def admin_update_subscription(
+    subscription_id: int,
+    payload: SubscriptionUpdate,
+    session: Session = Depends(get_session),
+):
+    subscription = session.get(Subscription, subscription_id)
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    validate_subscription_references(
+        session,
+        payload.category_id,
+        payload.created_by_telegram_id,
+    )
+    name = payload.name.strip()
+    amount_cents = amount_to_cents(payload.amount)
+    if not name:
+        raise HTTPException(status_code=400, detail="Subscription name is required")
+    if amount_cents <= 0:
+        raise HTTPException(status_code=400, detail="Subscription amount must be at least 0.01")
+    subscription.name = name
+    subscription.amount_cents = amount_cents
+    subscription.category_id = payload.category_id
+    subscription.created_by_telegram_id = payload.created_by_telegram_id
+    subscription.due_day = payload.due_day
+    subscription.note = payload.note.strip()
+    subscription.updated_at = datetime.utcnow()
+    session.add(subscription)
+    session.commit()
+    return {"id": subscription.id, "ok": True}
+
+
+@app.delete("/admin/subscriptions/{subscription_id}", dependencies=[Depends(require_admin)])
+def admin_delete_subscription(
+    subscription_id: int,
+    session: Session = Depends(get_session),
+):
+    subscription = session.get(Subscription, subscription_id)
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    payments = session.exec(
+        select(SubscriptionPayment).where(
+            SubscriptionPayment.subscription_id == subscription_id
+        )
+    ).all()
+    for payment in payments:
+        session.delete(payment)
+    session.delete(subscription)
+    session.commit()
+    return {"ok": True}
+
+
+@app.post("/admin/subscriptions/{subscription_id}/pay", dependencies=[Depends(require_admin)])
+def admin_pay_subscription(
+    subscription_id: int,
+    payload: SubscriptionPay,
+    session: Session = Depends(get_session),
+):
+    subscription = session.get(Subscription, subscription_id)
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    category, user = validate_subscription_references(
+        session,
+        subscription.category_id,
+        subscription.created_by_telegram_id,
+    )
+    period_start, period_end = resolve_subscription_period(payload.year, payload.month)
+    current_period_start, _ = month_bounds(datetime.utcnow())
+    if period_start > current_period_start:
+        raise HTTPException(status_code=400, detail="A future subscription period cannot be paid")
+    if subscription.created_at >= period_end:
+        raise HTTPException(status_code=400, detail="Subscription did not exist in this period")
+
+    existing_payment = session.exec(
+        select(SubscriptionPayment).where(
+            SubscriptionPayment.subscription_id == subscription_id,
+            SubscriptionPayment.period_year == period_start.year,
+            SubscriptionPayment.period_month == period_start.month,
+        )
+    ).first()
+    if existing_payment:
+        raise HTTPException(status_code=409, detail="Subscription is already paid for this month")
+
+    happened_at = payload.happened_at
+    if happened_at and (happened_at.year != period_start.year or happened_at.month != period_start.month):
+        raise HTTPException(status_code=400, detail="Payment date must be inside the selected month")
+    if not happened_at:
+        if period_start == current_period_start:
+            happened_at = datetime.utcnow()
+        else:
+            happened_at = datetime(
+                period_start.year,
+                period_start.month,
+                min(subscription.due_day, monthrange(period_start.year, period_start.month)[1]),
+            )
+
+    transaction = Transaction(
+        type="expense",
+        amount_cents=subscription.amount_cents,
+        category_id=category.id,
+        happened_at=happened_at,
+        note=subscription.note,
+        created_by_telegram_id=user.telegram_id,
+    )
+    try:
+        session.add(transaction)
+        session.flush()
+        payment = SubscriptionPayment(
+            subscription_id=subscription.id,
+            transaction_id=transaction.id,
+            period_year=period_start.year,
+            period_month=period_start.month,
+        )
+        session.add(payment)
+        session.commit()
+        session.refresh(payment)
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Subscription is already paid for this month")
+
+    limit_status = get_category_limit_progress(session, category.id, happened_at)
+    return {
+        "ok": True,
+        "payment_id": payment.id,
+        "transaction_id": transaction.id,
+        "period": period_start.strftime("%Y-%m"),
+        "limit_status": limit_status,
+    }
 
 
 def validate_income_sort_allocations(session: Session, allocations) -> list[tuple[Space, int]]:
@@ -1522,6 +1847,14 @@ def admin_delete_category(cat_id: int, session: Session = Depends(get_session)):
     tx_count = session.exec(select(func.count()).select_from(Transaction).where(Transaction.category_id == cat_id)).one()
     if tx_count > 0:
         raise HTTPException(status_code=400, detail=f"Cannot delete: {tx_count} transactions use this category")
+    subscription_count = session.exec(
+        select(func.count()).select_from(Subscription).where(Subscription.category_id == cat_id)
+    ).one()
+    if subscription_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete: {subscription_count} subscriptions use this category",
+        )
     category_limit = session.exec(
         select(CategoryLimit).where(CategoryLimit.category_id == cat_id)
     ).first()

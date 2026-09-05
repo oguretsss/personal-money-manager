@@ -8,6 +8,7 @@ A family budget management system with a FastAPI backend, Telegram bot frontend,
 - **Financial Summaries** - View monthly breakdowns by category with cash balance
 - **Savings Spaces** - Create virtual containers to organize savings goals
 - **Income Sorter** - Distribute an income transaction across Spaces with reusable per-user templates
+- **Monthly Subscriptions** - Reusable expense templates with paid, outstanding, and missed-month tracking
 - **Telegram Interface** - Manage finances directly from Telegram
 - **Quick Entry** - Send just a number to quickly add an expense
 - **Web Admin Panel** - Mobile-friendly reactive UI for managing all data
@@ -17,6 +18,7 @@ A family budget management system with a FastAPI backend, Telegram bot frontend,
   - Quick expense button (FAB) accessible from every page
   - Responsive design — tables convert to cards on mobile
   - Categories, monthly spending limits, and spaces management with inline editing
+  - Subscription CRUD, month history, and one-click expense creation
   - Non-blocking 50%, 70%, and 100% limit warnings while adding expenses
 
 ## Tech Stack
@@ -198,6 +200,9 @@ restart `api`, `bot`, and `web` together.
 | `GET` | `/spaces` | List savings spaces |
 | `POST` | `/spaces/transfer` | Transfer to/from space |
 | `POST` | `/admin/users` | Manage users (admin) |
+| `GET/POST` | `/admin/subscriptions` | List monthly statuses or create a subscription (admin) |
+| `PUT/DELETE` | `/admin/subscriptions/{id}` | Update or delete a subscription (admin) |
+| `POST` | `/admin/subscriptions/{id}/pay` | Mark a month paid and create its expense (admin) |
 | `GET/PUT` | `/admin/income-sort/templates/{telegram_id}` | Read or update a user's income-sort template (admin) |
 | `POST/DELETE` | `/admin/transactions/{id}/income-sort` | Apply or undo an income sort (admin) |
 

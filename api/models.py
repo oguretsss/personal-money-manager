@@ -48,6 +48,36 @@ class Transaction(SQLModel, table=True):
     note: str = ""
     created_by_telegram_id: int = Field(index=True)
 
+
+class Subscription(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(index=True)
+    amount_cents: int
+    category_id: int = Field(foreign_key="category.id", index=True)
+    created_by_telegram_id: int = Field(index=True)
+    due_day: int = 1
+    note: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class SubscriptionPayment(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint(
+            "subscription_id",
+            "period_year",
+            "period_month",
+            name="uq_subscription_payment_period",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    subscription_id: int = Field(foreign_key="subscription.id", index=True)
+    transaction_id: int = Field(foreign_key="transaction.id", index=True, unique=True)
+    period_year: int = Field(index=True)
+    period_month: int = Field(index=True)
+    paid_at: datetime = Field(default_factory=datetime.utcnow)
+
 class Space(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)

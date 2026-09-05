@@ -1085,6 +1085,175 @@ function spacesPage(initialSpaces, initialUsers) {
     };
 }
 
+/* ── Subscriptions page component ──────────────────────────────────── */
+
+function subscriptionsPage(initialData, initialCategories, initialUsers) {
+    const currentMonth = todayDate().slice(0, 7);
+    initialData = initialData || {};
+    initialCategories = initialCategories || [];
+    initialUsers = initialUsers || [];
+    const blankForm = () => ({
+        name: '',
+        amount: '',
+        category_id: initialCategories.length ? initialCategories[0].id : '',
+        created_by_telegram_id: initialUsers.length ? initialUsers[0].telegram_id : '',
+        due_day: 1,
+        note: '',
+    });
+
+    return {
+        items: initialData.items || [],
+        summary: initialData.summary || {},
+        previousMissed: initialData.previous_missed || null,
+        period: initialData.period || currentMonth,
+        isCurrent: initialData.is_current !== false,
+        maxPeriod: currentMonth,
+        categories: initialCategories || [],
+        users: initialUsers || [],
+        showForm: false,
+        editId: null,
+        form: blankForm(),
+        showConfirm: false,
+        deleteItem: null,
+        loading: false,
+        loadingId: null,
+
+        statusLabel(status) {
+            return {
+                paid: this.isCurrent ? 'Paid this month already' : 'Paid',
+                not_paid: 'Not paid yet',
+                missed: 'Missed',
+                upcoming: 'Upcoming',
+                not_started: 'Not started',
+            }[status] || status;
+        },
+
+        statusClass(status) {
+            return `subscription-${String(status).replace('_', '-')}`;
+        },
+
+        applyData(data) {
+            this.items = data.items || [];
+            this.summary = data.summary || {};
+            this.previousMissed = data.previous_missed || null;
+            this.period = data.period || this.period;
+            this.isCurrent = Boolean(data.is_current);
+        },
+
+        async loadPeriod() {
+            const match = String(this.period).match(/^(\d{4})-(\d{2})$/);
+            if (!match) return;
+            this.loading = true;
+            const data = await apiCall(
+                'GET',
+                `/api/subscriptions?year=${Number(match[1])}&month=${Number(match[2])}`,
+            );
+            this.loading = false;
+            if (data) this.applyData(data);
+        },
+
+        showCurrentMonth() {
+            this.period = currentMonth;
+            return this.loadPeriod();
+        },
+
+        showMissedPreviousMonth() {
+            if (!this.previousMissed) return;
+            this.period = this.previousMissed.period;
+            return this.loadPeriod();
+        },
+
+        openCreate() {
+            this.editId = null;
+            this.form = blankForm();
+            this.showForm = true;
+        },
+
+        openEdit(item) {
+            this.editId = item.id;
+            this.form = {
+                name: item.name,
+                amount: Number(item.amount).toFixed(2),
+                category_id: item.category_id,
+                created_by_telegram_id: item.created_by_telegram_id,
+                due_day: item.due_day,
+                note: item.note || '',
+            };
+            this.showForm = true;
+        },
+
+        async submitForm() {
+            const amount = parseAmount(this.form.amount);
+            const dueDay = Number(this.form.due_day);
+            if (!this.form.name.trim() || !Number.isFinite(amount) || amount <= 0
+                || !this.form.category_id || !this.form.created_by_telegram_id
+                || !Number.isInteger(dueDay) || dueDay < 1 || dueDay > 31) {
+                Alpine.store('toast').add('Please fill all required subscription fields', 'error');
+                return;
+            }
+
+            const payload = {
+                name: this.form.name.trim(),
+                amount,
+                category_id: Number(this.form.category_id),
+                created_by_telegram_id: Number(this.form.created_by_telegram_id),
+                due_day: dueDay,
+                note: this.form.note.trim(),
+            };
+            this.loading = true;
+            const result = await apiCall(
+                this.editId ? 'PUT' : 'POST',
+                this.editId ? `/api/subscriptions/${this.editId}` : '/api/subscriptions',
+                payload,
+            );
+            this.loading = false;
+            if (!result) return;
+
+            Alpine.store('toast').add(
+                this.editId ? 'Subscription updated' : 'Subscription created',
+                'success',
+            );
+            this.showForm = false;
+            await this.loadPeriod();
+        },
+
+        async pay(item) {
+            const [year, month] = this.period.split('-').map(Number);
+            this.loadingId = item.id;
+            const result = await apiCall(
+                'POST',
+                `/api/subscriptions/${item.id}/pay`,
+                { year, month },
+            );
+            this.loadingId = null;
+            if (!result) return;
+
+            if (!announceLimitStatus(result)) {
+                Alpine.store('toast').add(`${item.name} paid and added to expenses`, 'success');
+            }
+            await this.loadPeriod();
+        },
+
+        confirmDelete(item) {
+            this.deleteItem = item;
+            this.showConfirm = true;
+        },
+
+        async doDelete() {
+            if (!this.deleteItem) return;
+            this.loading = true;
+            const result = await apiCall('DELETE', `/api/subscriptions/${this.deleteItem.id}`);
+            this.loading = false;
+            if (!result) return;
+
+            Alpine.store('toast').add('Subscription deleted', 'success');
+            this.showConfirm = false;
+            this.deleteItem = null;
+            await this.loadPeriod();
+        },
+    };
+}
+
 /* -- Investments page component ------------------------------------------ */
 
 function investmentsPage(initialAccounts, initialAssets, initialUsers) {

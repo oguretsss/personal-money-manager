@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% set active = "subscriptions" %}
+{% block title %}Subscriptions - MoneyManage Admin{% endblock %}
+{% block content %}
+<script id="subscriptions-init-data" type="application/json">{{ {"subscriptions": subscriptions, "categories": categories, "users": users} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('subscriptions-init-data').textContent); return subscriptionsPage(d.subscriptions, d.categories, d.users); })()">
+    <div class="subscriptions-heading">
+        <div>
+            <h2>Subscriptions</h2>
+            <p class="subscriptions-subtitle">Monthly expense templates and their payment status.</p>
+        </div>
+        <div class="subscriptions-period">
+            <label for="subscription-period">Month</label>
+            <input id="subscription-period" type="month" x-model="period" :max="maxPeriod" @change="loadPeriod()">
+            <button class="secondary btn-sm" x-show="!isCurrent" @click="showCurrentMonth()">Current month</button>
+        </div>
+    </div>
+
+    <div class="subscription-missed-alert" x-show="isCurrent && previousMissed && previousMissed.count > 0" x-cloak>
+        <div>
+            <strong x-text="`${previousMissed.count} missed last month`"></strong>
+            <span x-text="`${formatMoney(previousMissed.amount)} was not recorded: ${previousMissed.items.map(item => item.name).join(', ')}`"></span>
+        </div>
+        <button class="secondary btn-sm" @click="showMissedPreviousMonth()">Review month</button>
+    </div>
+
+    <div class="stat-grid stat-grid-month subscriptions-summary">
+        <div class="stat-card">
+            <h3>Expected</h3>
+            <p x-text="formatMoney(summary.expected_amount)"></p>
+            <small x-text="`${summary.total || 0} subscriptions`"></small>
+        </div>
+        <div class="stat-card">
+            <h3>Paid</h3>
+            <p class="text-green" x-text="formatMoney(summary.paid_amount)"></p>
+            <small x-text="`${summary.paid || 0} completed`"></small>
+        </div>
+        <div class="stat-card">
+            <h3>Outstanding</h3>
+            <p :class="(summary.outstanding || 0) > 0 ? 'text-red' : ''" x-text="formatMoney(summary.outstanding_amount)"></p>
+            <small x-text="`${summary.outstanding || 0} remaining`"></small>
+        </div>
+        <div class="stat-card">
+            <h3>Missed</h3>
+            <p :class="(summary.missed || 0) > 0 ? 'text-red' : ''" x-text="summary.missed || 0"></p>
+            <small>in selected month</small>
+        </div>
+    </div>
+
+    <div class="page-actions">
+        <button @click="openCreate()">+ New Subscription</button>
+    </div>
+
+    <div x-show="showForm" x-cloak class="modal-overlay" @click.self="showForm = false">
+        <div class="modal-content">
+            <h3 x-text="editId ? 'Edit Subscription' : 'New Subscription'"></h3>
+            <div class="grid-2">
+                <div class="form-row">
+                    <label>Name</label>
+                    <input type="text" x-model="form.name" placeholder="e.g. Netflix" required>
+                </div>
+                <div class="form-row">
+                    <label>Monthly amount</label>
+                    <input type="text" inputmode="decimal" x-model="form.amount" placeholder="0.00" required>
+                </div>
+            </div>
+            <div class="grid-2">
+                <div class="form-row">
+                    <label>Expense category</label>
+                    <select x-model="form.category_id" required>
+                        <option value="">Select...</option>
+                        <template x-for="category in categories" :key="category.id">
+                            <option :value="category.id" x-text="category.name"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>User</label>
+                    <select x-model="form.created_by_telegram_id" required>
+                        <option value="">Select...</option>
+                        <template x-for="user in users" :key="user.id">
+                            <option :value="user.telegram_id" x-text="user.name"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row">
+                <label>Usual payment day</label>
+                <input type="number" min="1" max="31" step="1" x-model.number="form.due_day" required>
+                <small>Used as the expense date when recording a missed month retroactively.</small>
+            </div>
+            <div class="form-row">
+                <label>Note</label>
+                <textarea x-model="form.note" placeholder="Optional" rows="3"></textarea>
+            </div>
+            <div class="form-actions">
+                <button class="secondary" @click="showForm = false">Cancel</button>
+                <button @click="submitForm()" :disabled="loading" x-text="loading ? 'Saving...' : (editId ? 'Save Changes' : 'Create Subscription')"></button>
+            </div>
+        </div>
+    </div>
+
+    <div x-show="showConfirm" x-cloak class="confirm-overlay" @click.self="showConfirm = false">
+        <div class="confirm-box">
+            <p>Delete <strong x-text="deleteItem && deleteItem.name"></strong>?</p>
+            <small>Existing expense transactions will be kept.</small>
+            <div class="confirm-actions">
+                <button class="secondary" @click="showConfirm = false">Cancel</button>
+                <button class="btn-danger" @click="doDelete()" :disabled="loading" x-text="loading ? 'Deleting...' : 'Delete'"></button>
+            </div>
+        </div>
+    </div>
+
+    <div class="subscription-loading" x-show="loading && !showForm && !showConfirm">Loading...</div>
+    <table class="responsive-table subscriptions-table">
+        <thead>
+            <tr>
+                <th>Subscription</th>
+                <th>Category / User</th>
+                <th>Due</th>
+                <th class="text-right">Amount</th>
+                <th>Status</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            <template x-for="item in items" :key="item.id">
+                <tr>
+                    <td data-label="Subscription">
+                        <strong x-text="item.name"></strong>
+                        <small class="subscription-note" x-show="item.note" x-text="item.note"></small>
+                    </td>
+                    <td data-label="Category / User">
+                        <span x-text="item.category"></span>
+                        <small class="subscription-note" x-text="item.user_name"></small>
+                    </td>
+                    <td data-label="Due" x-text="`Day ${item.due_day}`"></td>
+                    <td data-label="Amount" class="amount" x-text="formatMoney(item.amount)"></td>
+                    <td data-label="Status">
+                        <span class="subscription-status" :class="statusClass(item.status)" x-text="statusLabel(item.status)"></span>
+                        <small class="subscription-note" x-show="item.payment" x-text="item.payment ? `Expense #${item.payment.transaction_id}` : ''"></small>
+                    </td>
+                    <td class="actions-cell">
+                        <span class="subscription-actions">
+                            <button class="btn-sm subscription-pay" x-show="item.status === 'not_paid' || item.status === 'missed'" @click="pay(item)" :disabled="loadingId === item.id" x-text="loadingId === item.id ? 'Paying...' : (item.status === 'missed' ? 'Record payment' : 'Pay')"></button>
+                            <button class="btn-sm" @click="openEdit(item)">Edit</button>
+                            <button class="btn-sm btn-danger" @click="confirmDelete(item)">Delete</button>
+                        </span>
+                    </td>
+                </tr>
+            </template>
+            <tr x-show="items.length === 0">
+                <td colspan="6">No subscriptions yet.</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+{% endblock %}

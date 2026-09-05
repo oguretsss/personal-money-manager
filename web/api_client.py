@@ -43,6 +43,32 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
+    def list_subscriptions(self, year: int | None = None, month: int | None = None) -> dict:
+        params = {k: v for k, v in {"year": year, "month": month}.items() if v is not None}
+        r = self._client.get("/admin/subscriptions", params=params)
+        r.raise_for_status()
+        return r.json()
+
+    def create_subscription(self, data: dict) -> dict:
+        r = self._client.post("/admin/subscriptions", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def update_subscription(self, subscription_id: int, data: dict) -> dict:
+        r = self._client.put(f"/admin/subscriptions/{subscription_id}", json=data)
+        r.raise_for_status()
+        return r.json()
+
+    def delete_subscription(self, subscription_id: int) -> dict:
+        r = self._client.delete(f"/admin/subscriptions/{subscription_id}")
+        r.raise_for_status()
+        return r.json()
+
+    def pay_subscription(self, subscription_id: int, data: dict) -> dict:
+        r = self._client.post(f"/admin/subscriptions/{subscription_id}/pay", json=data)
+        r.raise_for_status()
+        return r.json()
+
     def get_income_sort_template(self, telegram_id: int) -> dict:
         r = self._client.get(f"/admin/income-sort/templates/{telegram_id}")
         r.raise_for_status()

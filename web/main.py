@@ -379,6 +379,30 @@ def spaces_page(request: Request, _user: str = Depends(require_login)):
     })
 
 
+@app.get("/subscriptions", response_class=HTMLResponse)
+def subscriptions_page(request: Request, _user: str = Depends(require_login)):
+    try:
+        subscriptions = api.list_subscriptions()
+        categories = [category for category in api.list_categories() if category["type"] == "expense"]
+        users = [user for user in api.list_users() if user["is_active"]]
+    except httpx.HTTPError:
+        subscriptions = {
+            "period": datetime.utcnow().strftime("%Y-%m"),
+            "is_current": True,
+            "items": [],
+            "summary": {},
+        }
+        categories = []
+        users = []
+    return templates.TemplateResponse(request, "subscriptions.html", {
+        "request": request,
+        "subscriptions": subscriptions,
+        "categories": categories,
+        "users": users,
+        "messages": get_flashed_messages(request),
+    })
+
+
 @app.get("/investments", response_class=HTMLResponse)
 def investments_page(request: Request, _user: str = Depends(require_login)):
     try:
@@ -516,6 +540,58 @@ def api_update_transaction(tx_id: int, _user: str = Depends(require_login), data
 def api_delete_transaction(tx_id: int, _user: str = Depends(require_login)):
     try:
         return api.delete_transaction(tx_id)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.get("/api/subscriptions")
+def api_list_subscriptions(
+    _user: str = Depends(require_login),
+    year: int | None = None,
+    month: int | None = None,
+):
+    try:
+        return api.list_subscriptions(year=year, month=month)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.post("/api/subscriptions")
+def api_create_subscription(_user: str = Depends(require_login), data: dict = Body()):
+    try:
+        return api.create_subscription(data)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.put("/api/subscriptions/{subscription_id}")
+def api_update_subscription(
+    subscription_id: int,
+    _user: str = Depends(require_login),
+    data: dict = Body(),
+):
+    try:
+        return api.update_subscription(subscription_id, data)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.delete("/api/subscriptions/{subscription_id}")
+def api_delete_subscription(subscription_id: int, _user: str = Depends(require_login)):
+    try:
+        return api.delete_subscription(subscription_id)
+    except httpx.HTTPError as e:
+        return _error_json(e)
+
+
+@app.post("/api/subscriptions/{subscription_id}/pay")
+def api_pay_subscription(
+    subscription_id: int,
+    _user: str = Depends(require_login),
+    data: dict = Body(),
+):
+    try:
+        return api.pay_subscription(subscription_id, data)
     except httpx.HTTPError as e:
         return _error_json(e)
 

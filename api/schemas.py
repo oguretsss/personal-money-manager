@@ -60,6 +60,25 @@ class AdminTransactionCreate(BaseModel):
     happened_at: datetime | None = None
     note: str = ""
 
+
+class SubscriptionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    amount: float = Field(gt=0)
+    category_id: int
+    created_by_telegram_id: int
+    due_day: int = Field(default=1, ge=1, le=31)
+    note: str = ""
+
+
+class SubscriptionUpdate(SubscriptionCreate):
+    pass
+
+
+class SubscriptionPay(BaseModel):
+    year: int | None = None
+    month: int | None = Field(default=None, ge=1, le=12)
+    happened_at: datetime | None = None
+
 class CategoryUpdate(BaseModel):
     name: str = Field(min_length=1)
 

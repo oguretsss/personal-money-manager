@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}MoneyManage Admin{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-    <link rel="stylesheet" href="/static/app.css?v=20260814-1">
-    <script src="/static/app.js?v=20260814-1"></script>
+    <link rel="stylesheet" href="/static/app.css?v=20260905-1">
+    <script src="/static/app.js?v=20260905-1"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 </head>
 <body>
@@ -19,6 +19,7 @@
         <ul class="nav-links" :class="{ 'open': navOpen }" @click="navOpen = false">
             <li><a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a></li>
             <li><a href="/transactions" class="{% if active == 'transactions' %}active{% endif %}">Transactions</a></li>
+            <li><a href="/subscriptions" class="{% if active == 'subscriptions' %}active{% endif %}">Subscriptions</a></li>
             <li><a href="/investments" class="{% if active == 'investments' %}active{% endif %}">Investments</a></li>
             <li><a href="/categories" class="{% if active == 'categories' %}active{% endif %}">Categories</a></li>
             <li><a href="/limits" class="{% if active == 'limits' %}active{% endif %}">Limits</a></li>

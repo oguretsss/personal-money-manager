@@ -1,5 +1,5 @@
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import tempfile
@@ -39,6 +39,8 @@ from models import (
     IncomeSortAllocation,
     IncomeSortTemplateItem,
     SpaceTransfer,
+    Subscription,
+    SubscriptionPayment,
     Transaction,
     User,
 )
@@ -665,6 +667,226 @@ class ApiAuthenticationTests(unittest.TestCase):
                 )
             ).one()
             self.assertEqual(saved.amount_cents, 12500)
+
+    def test_subscription_payment_creates_one_expense_and_tracks_current_month(self):
+        self.add_user(1015)
+        category = self.client.post(
+            "/admin/categories",
+            params={"name": "Streaming subscription test", "type": "expense"},
+            headers=self.bearer(ADMIN_TOKEN),
+        ).json()
+        create_response = self.client.post(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={
+                "name": "TestFlix",
+                "amount": 12.99,
+                "category_id": category["id"],
+                "created_by_telegram_id": 1015,
+                "due_day": 7,
+                "note": "Monthly streaming",
+            },
+        )
+
+        self.assertEqual(create_response.status_code, 200)
+        subscription_id = create_response.json()["id"]
+        before_payment = self.client.get(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+        ).json()
+        self.assertEqual(before_payment["items"][0]["status"], "not_paid")
+        self.assertEqual(before_payment["summary"]["outstanding_amount"], 12.99)
+
+        now = datetime.utcnow()
+        payment_response = self.client.post(
+            f"/admin/subscriptions/{subscription_id}/pay",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={"year": now.year, "month": now.month},
+        )
+        duplicate_response = self.client.post(
+            f"/admin/subscriptions/{subscription_id}/pay",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={"year": now.year, "month": now.month},
+        )
+
+        self.assertEqual(payment_response.status_code, 200)
+        self.assertEqual(duplicate_response.status_code, 409)
+        with Session(engine) as session:
+            transaction = session.exec(select(Transaction)).one()
+            self.assertEqual(transaction.type, "expense")
+            self.assertEqual(transaction.amount_cents, 1299)
+            self.assertEqual(transaction.category_id, category["id"])
+            self.assertEqual(transaction.created_by_telegram_id, 1015)
+            self.assertEqual(transaction.note, "Monthly streaming")
+            payment = session.exec(select(SubscriptionPayment)).one()
+            self.assertEqual(payment.transaction_id, transaction.id)
+
+        after_payment = self.client.get(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+        ).json()
+        self.assertEqual(after_payment["items"][0]["status"], "paid")
+        self.assertEqual(after_payment["summary"]["paid_amount"], 12.99)
+
+        delete_transaction_response = self.client.delete(
+            f"/admin/transactions/{payment_response.json()['transaction_id']}",
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(delete_transaction_response.status_code, 200)
+        after_delete = self.client.get(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+        ).json()
+        self.assertEqual(after_delete["items"][0]["status"], "not_paid")
+        with Session(engine) as session:
+            self.assertEqual(session.exec(select(SubscriptionPayment)).all(), [])
+
+    def test_subscription_reports_and_records_a_missed_month(self):
+        self.add_user(1016)
+        now = datetime.utcnow()
+        current_start = datetime(now.year, now.month, 1)
+        previous_month = current_start - timedelta(days=1)
+        previous_start = previous_month.replace(day=1)
+
+        with Session(engine) as session:
+            category = Category(name="Historical subscription test", type="expense")
+            session.add(category)
+            session.commit()
+            session.refresh(category)
+            subscription = Subscription(
+                name="Historical service",
+                amount_cents=4567,
+                category_id=category.id,
+                created_by_telegram_id=1016,
+                due_day=31,
+                note="Historical monthly charge",
+                created_at=previous_start - timedelta(days=1),
+            )
+            session.add(subscription)
+            session.commit()
+            session.refresh(subscription)
+            subscription_id = subscription.id
+
+        current_response = self.client.get(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(current_response.status_code, 200)
+        self.assertEqual(current_response.json()["previous_missed"]["count"], 1)
+        self.assertEqual(
+            current_response.json()["previous_missed"]["items"][0]["name"],
+            "Historical service",
+        )
+
+        missed_response = self.client.get(
+            "/admin/subscriptions",
+            params={"year": previous_start.year, "month": previous_start.month},
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(missed_response.status_code, 200)
+        self.assertEqual(missed_response.json()["items"][0]["status"], "missed")
+        self.assertEqual(missed_response.json()["summary"]["missed"], 1)
+
+        pay_response = self.client.post(
+            f"/admin/subscriptions/{subscription_id}/pay",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={"year": previous_start.year, "month": previous_start.month},
+        )
+        self.assertEqual(pay_response.status_code, 200)
+        with Session(engine) as session:
+            transaction = session.exec(select(Transaction)).one()
+            self.assertEqual(transaction.happened_at.year, previous_start.year)
+            self.assertEqual(transaction.happened_at.month, previous_start.month)
+            self.assertLessEqual(transaction.happened_at.day, 31)
+
+        paid_response = self.client.get(
+            "/admin/subscriptions",
+            params={"year": previous_start.year, "month": previous_start.month},
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(paid_response.json()["items"][0]["status"], "paid")
+        self.assertEqual(
+            self.client.get(
+                "/admin/subscriptions",
+                headers=self.bearer(ADMIN_TOKEN),
+            ).json()["previous_missed"]["count"],
+            0,
+        )
+
+    def test_subscription_validates_references_and_protects_its_category(self):
+        self.add_user(1017)
+        expense_category = self.client.post(
+            "/admin/categories",
+            params={"name": "Protected subscription category", "type": "expense"},
+            headers=self.bearer(ADMIN_TOKEN),
+        ).json()
+        income_category = self.client.post(
+            "/admin/categories",
+            params={"name": "Invalid subscription income", "type": "income"},
+            headers=self.bearer(ADMIN_TOKEN),
+        ).json()
+        invalid_response = self.client.post(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={
+                "name": "Invalid",
+                "amount": 10,
+                "category_id": income_category["id"],
+                "created_by_telegram_id": 1017,
+            },
+        )
+        self.assertEqual(invalid_response.status_code, 400)
+
+        subscription_response = self.client.post(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={
+                "name": "Protected",
+                "amount": 10,
+                "category_id": expense_category["id"],
+                "created_by_telegram_id": 1017,
+            },
+        )
+        update_response = self.client.put(
+            f"/admin/subscriptions/{subscription_response.json()['id']}",
+            headers=self.bearer(ADMIN_TOKEN),
+            json={
+                "name": "Protected updated",
+                "amount": 11.50,
+                "category_id": expense_category["id"],
+                "created_by_telegram_id": 1017,
+                "due_day": 12,
+                "note": "Updated note",
+            },
+        )
+        self.assertEqual(update_response.status_code, 200)
+        updated = self.client.get(
+            "/admin/subscriptions",
+            headers=self.bearer(ADMIN_TOKEN),
+        ).json()["items"][0]
+        self.assertEqual(updated["name"], "Protected updated")
+        self.assertEqual(updated["amount"], 11.5)
+        self.assertEqual(updated["due_day"], 12)
+
+        delete_category_response = self.client.delete(
+            f"/admin/categories/{expense_category['id']}",
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(delete_category_response.status_code, 400)
+        self.assertIn("subscriptions use this category", delete_category_response.json()["detail"])
+
+        delete_subscription_response = self.client.delete(
+            f"/admin/subscriptions/{subscription_response.json()['id']}",
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(delete_subscription_response.status_code, 200)
+        self.assertEqual(
+            self.client.delete(
+                f"/admin/categories/{expense_category['id']}",
+                headers=self.bearer(ADMIN_TOKEN),
+            ).status_code,
+            200,
+        )
 
 
 if __name__ == "__main__":
