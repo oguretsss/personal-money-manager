@@ -3,7 +3,7 @@ services:
     build: ./api
     environment:
       API_ADMIN_TOKEN: "${API_ADMIN_TOKEN:?API_ADMIN_TOKEN is required}"
-      API_BOT_TOKEN: "${API_BOT_TOKEN:?API_BOT_TOKEN is required}"
+      API_BOT_TOKEN: "${API_BOT_TOKEN:-}"
       DB_PATH: "${DB_PATH:-data/budget.sqlite}"
       ENABLE_API_DOCS: "${ENABLE_API_DOCS:-false}"
       TZ: "${TZ:-Europe/Berlin}"
@@ -14,11 +14,12 @@ services:
     restart: unless-stopped
 
   bot:
+    profiles: ["telegram"]
     build: ./bot
     environment:
       API_BASE_URL: "${API_BASE_URL:-http://api:8001}"
-      API_BOT_TOKEN: "${API_BOT_TOKEN:?API_BOT_TOKEN is required}"
-      BOT_TOKEN: "${BOT_TOKEN:?BOT_TOKEN is required}"
+      API_BOT_TOKEN: "${API_BOT_TOKEN:-}"
+      BOT_TOKEN: "${BOT_TOKEN:-}"
       TZ: "${TZ:-Europe/Berlin}"
     depends_on:
       - api

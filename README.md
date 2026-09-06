@@ -38,10 +38,8 @@ A family budget management system with a FastAPI backend, Telegram bot frontend,
 1. Clone the repository
 2. Create a `.env` file with your configuration:
    ```env
-   BOT_TOKEN=your_telegram_bot_token
    API_BASE_URL=http://api:8001
    API_ADMIN_TOKEN=generate_a_random_token_with_at_least_32_characters
-   API_BOT_TOKEN=generate_a_different_random_token_with_at_least_32_characters
    ADMIN_PASSWORD=choose_a_strong_password
    WEB_SECRET_KEY=generate_another_random_secret
    ```
@@ -52,6 +50,17 @@ A family budget management system with a FastAPI backend, Telegram bot frontend,
 3. Run:
    ```bash
    docker-compose up --build
+   ```
+
+   By default, only the API and web admin start. The Telegram bot is disabled.
+   To enable it, set `BOT_TOKEN` and a distinct `API_BOT_TOKEN` of at least 32
+   characters in `.env`, then run:
+   ```bash
+   docker compose --profile telegram up -d --build
+   ```
+   To stop an existing bot container:
+   ```bash
+   docker compose --profile telegram stop bot
    ```
 
 ### Manual Setup
@@ -80,10 +89,10 @@ python bot.py
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BOT_TOKEN` | Telegram bot token (required) | - |
+| `BOT_TOKEN` | Telegram bot token; required only when enabling the bot | - |
 | `API_BASE_URL` | API endpoint URL used by bot and web | `http://api:8001` |
 | `API_ADMIN_TOKEN` | Bootstrap token for the web admin and token management; minimum 32 characters | - |
-| `API_BOT_TOKEN` | Dedicated Telegram bot service token; minimum 32 characters and different from the admin token | - |
+| `API_BOT_TOKEN` | Required only when enabling the bot; minimum 32 characters and different from the admin token | - |
 | `DB_PATH` | SQLite database path | `data/budget.sqlite` |
 | `ENABLE_API_DOCS` | Enable `/docs`, `/redoc`, and `/openapi.json` | `false` |
 | `API_DOMAIN` | Public API domain used by the optional HTTPS proxy | - |
@@ -185,8 +194,9 @@ Caddy obtains and renews the TLS certificate automatically. Port 8001 remains
 available only on localhost and inside the Docker network.
 
 When upgrading an existing installation, replace `API_ADMIN_TOKEN` with a new
-random value of at least 32 characters, add a different `API_BOT_TOKEN`, and
-restart `api`, `bot`, and `web` together.
+random value of at least 32 characters and restart `api` and `web` together.
+If the Telegram bot is enabled, also add a different `API_BOT_TOKEN` and restart
+`bot` using the `telegram` profile.
 
 ## API Endpoints
 
