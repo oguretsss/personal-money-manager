@@ -505,17 +505,21 @@ def api_list_transactions(
     type: str | None = None,
     category: str | None = None,
     user_id: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
     page: int = 1,
     per_page: int = 50,
 ):
     try:
-        return api.list_transactions(
+        return api.list_transactions(**build_transaction_list_params(
             type=type,
             category=category,
-            user_id=normalize_user_id(user_id),
+            user_id=user_id,
+            start=start,
+            end=end,
             page=page,
             per_page=per_page,
-        )
+        ))
     except httpx.HTTPError as e:
         return _error_json(e)
 

@@ -368,6 +368,63 @@ class ApiAuthenticationTests(unittest.TestCase):
         )
         self.assertEqual(delete_response.status_code, 200)
 
+    def test_limit_transaction_details_match_monthly_spending_across_pages(self):
+        self.add_user(1009)
+        self.add_user(1010)
+        with Session(engine) as session:
+            cafe = Category(name="Cafe details", type="expense")
+            other = Category(name="Other details", type="expense")
+            session.add_all([cafe, other])
+            session.commit()
+            session.refresh(cafe)
+            session.refresh(other)
+            session.add(CategoryLimit(category_id=cafe.id, amount_cents=30000))
+            included = [
+                Transaction(type="expense", category_id=cafe.id, amount_cents=2700,
+                            happened_at=datetime(2026, 7, 1), note="Biergarten",
+                            created_by_telegram_id=1009),
+                Transaction(type="expense", category_id=cafe.id, amount_cents=2000,
+                            happened_at=datetime(2026, 7, 31, 23, 59, 59, 999999),
+                            note="Work canteen", created_by_telegram_id=1010),
+                Transaction(type="expense", category_id=cafe.id, amount_cents=3000,
+                            happened_at=datetime(2026, 7, 31, 23, 59, 59, 999999),
+                            note="Biergarten again", created_by_telegram_id=1009),
+            ]
+            session.add_all(included)
+            session.add_all([
+                Transaction(type=tx_type, category_id=category_id, amount_cents=9900,
+                            happened_at=happened_at, created_by_telegram_id=1009)
+                for tx_type, category_id, happened_at in [
+                    ("expense", cafe.id, datetime(2026, 6, 30, 23, 59, 59)),
+                    ("expense", cafe.id, datetime(2026, 8, 1)),
+                    ("expense", other.id, datetime(2026, 7, 15)),
+                    ("income", cafe.id, datetime(2026, 7, 15)),
+                ]
+            ])
+            session.commit()
+            expected_ids = [tx.id for tx in reversed(included)]
+
+        limit_response = self.client.get(
+            "/admin/limits", params={"year": 2026, "month": 7},
+            headers=self.bearer(ADMIN_TOKEN),
+        )
+        self.assertEqual(limit_response.status_code, 200)
+        limit = limit_response.json()[0]
+        items = []
+        for page in (1, 2):
+            response = self.client.get("/admin/transactions", params={
+                "type": "expense", "category": limit["category"],
+                "start": "2026-07-01T00:00:00", "end": "2026-08-01T00:00:00",
+                "page": page, "per_page": 2,
+            }, headers=self.bearer(ADMIN_TOKEN))
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["total"], 3)
+            items.extend(response.json()["items"])
+        self.assertEqual([tx["id"] for tx in items], expected_ids)
+        self.assertEqual(sum(round(tx["amount"] * 100) for tx in items), 7700)
+        self.assertEqual(limit["spent"], 77)
+        self.assertEqual(items[-1]["note"], "Biergarten")
+
     def test_limit_rejects_income_category(self):
         category_response = self.client.post(
             "/admin/categories",

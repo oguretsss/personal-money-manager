@@ -62,22 +62,57 @@
     </div>
     <div class="limit-grid">
         {% for limit in limits %}
-        <article class="limit-card limit-{{ limit.status }}">
-            <div class="limit-card-header">
-                <strong>{{ limit.category }}</strong>
-                <span>{{ "%.0f"|format(limit.percentage) }}%</span>
+        <article class="limit-card limit-card-expandable limit-{{ limit.status }}"
+                 x-data='categoryLimitCard({{ limit.category | tojson }}, {{ limit.period | tojson }})'>
+            <button type="button" class="limit-card-toggle" @click="toggle()"
+                    id="limit-toggle-{{ limit.category_id }}"
+                    aria-expanded="false" :aria-expanded="expanded"
+                    aria-controls="limit-transactions-{{ limit.category_id }}">
+                <span class="limit-card-header">
+                    <strong>{{ limit.category }}</strong>
+                    <span>{{ "%.0f"|format(limit.percentage) }}%</span>
+                </span>
+                <span class="limit-amount-row">
+                    <span>&euro;{{ "%.2f"|format(limit.spent) }} spent</span>
+                    <span>&euro;{{ "%.2f"|format(limit.limit) }} limit</span>
+                </span>
+                <span class="limit-progress-track" role="progressbar"
+                      aria-label="{{ limit.category }} limit usage"
+                      aria-valuemin="0" aria-valuemax="100"
+                      aria-valuenow="{{ 100 if limit.percentage > 100 else limit.percentage }}">
+                    <span class="limit-progress-fill" style="width: {{ 100 if limit.percentage > 100 else limit.percentage }}%;"></span>
+                </span>
+                <span class="limit-comment">{{ limit.message }}</span>
+                <span class="limit-card-disclosure">
+                    <span x-text="expanded ? 'Hide transactions' : 'Show transactions'">Show transactions</span>
+                    <span class="limit-card-chevron" :class="{ 'is-expanded': expanded }" aria-hidden="true">&#8964;</span>
+                </span>
+            </button>
+            <div class="limit-transactions" id="limit-transactions-{{ limit.category_id }}"
+                 role="region" aria-labelledby="limit-toggle-{{ limit.category_id }}"
+                 x-show="expanded" x-cloak :aria-busy="loading">
+                <p class="limit-transactions-status" x-show="loaded" x-cloak
+                   x-text="`${transactions.length} of ${total} transactions · {{ limit.period }}`"></p>
+                <ul class="limit-transaction-list" x-show="transactions.length">
+                    <template x-for="tx in transactions" :key="tx.id">
+                        <li class="limit-transaction">
+                            <strong class="limit-transaction-amount" x-text="formatMoney(tx.amount)"></strong>
+                            <span class="limit-transaction-details">
+                                <span class="limit-transaction-note" x-text="tx.note || 'No note'"></span>
+                                <time :datetime="tx.happened_at" x-text="transactionDate(tx.happened_at)"></time>
+                            </span>
+                        </li>
+                    </template>
+                </ul>
+                <p class="limit-transactions-status" x-show="loaded && total === 0" x-cloak>No expenses this month.</p>
+                <p class="limit-transactions-status" role="status" x-show="loading" x-cloak>Loading transactions…</p>
+                <div x-show="error" x-cloak>
+                    <p class="limit-transactions-status" role="alert">Unable to load transactions.</p>
+                    <button type="button" class="btn-sm" @click="loadTransactions()" :disabled="loading">Try again</button>
+                </div>
+                <button type="button" class="btn-sm" x-show="loaded && transactions.length < total && !error"
+                        x-cloak @click="loadTransactions()" :disabled="loading">Show more</button>
             </div>
-            <div class="limit-amount-row">
-                <span>&euro;{{ "%.2f"|format(limit.spent) }} spent</span>
-                <span>&euro;{{ "%.2f"|format(limit.limit) }} limit</span>
-            </div>
-            <div class="limit-progress-track" role="progressbar"
-                 aria-label="{{ limit.category }} limit usage"
-                 aria-valuemin="0" aria-valuemax="100"
-                 aria-valuenow="{{ 100 if limit.percentage > 100 else limit.percentage }}">
-                <span class="limit-progress-fill" style="width: {{ 100 if limit.percentage > 100 else limit.percentage }}%;"></span>
-            </div>
-            <p class="limit-comment">{{ limit.message }}</p>
         </article>
         {% endfor %}
     </div>

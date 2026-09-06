@@ -1190,7 +1190,7 @@ def admin_list_transactions(
         count_stmt = count_stmt.where(Transaction.happened_at < end)
     total = session.exec(count_stmt).one()
 
-    stmt = stmt.order_by(Transaction.happened_at.desc()).offset((page - 1) * per_page).limit(per_page)
+    stmt = stmt.order_by(Transaction.happened_at.desc(), Transaction.id.desc()).offset((page - 1) * per_page).limit(per_page)
     rows = session.exec(stmt).all()
     transaction_ids = [tx.id for tx, _ in rows]
     income_sorts = (

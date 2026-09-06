@@ -333,6 +333,64 @@ function fabExpense() {
     };
 }
 
+/* ── Dashboard category limit details ───────────────────────────────── */
+
+function categoryLimitCard(category, period) {
+    // Use the card's month, even if the page stays open into the next month.
+    const [year, month] = period.split('-').map(Number);
+    const nextMonth = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+    return {
+        expanded: false,
+        loading: false,
+        loaded: false,
+        error: false,
+        transactions: [],
+        total: 0,
+        page: 0,
+
+        async toggle() {
+            this.expanded = !this.expanded;
+            if (this.expanded && !this.loaded) await this.loadTransactions();
+        },
+
+        async loadTransactions() {
+            if (this.loading) return;
+            this.loading = true;
+            this.error = false;
+            const params = new URLSearchParams({
+                type: 'expense',
+                category,
+                start: `${period}-01T00:00:00`,
+                end: `${nextMonth}T00:00:00`,
+                page: this.page + 1,
+                per_page: 50,
+            });
+            try {
+                const data = await apiCall('GET', `/api/transactions?${params}`);
+                if (!data) {
+                    this.error = true;
+                    return;
+                }
+                this.transactions.push(...data.items);
+                this.total = data.total;
+                this.page = data.page;
+                this.loaded = true;
+            } catch {
+                this.error = true;
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        transactionDate(value) {
+            // Preserve the recorded calendar date without timezone conversion.
+            return new Date(`${value.slice(0, 10)}T00:00:00`).toLocaleDateString(undefined, {
+                day: 'numeric', month: 'short', year: 'numeric',
+            });
+        },
+    };
+}
+
 /* ── Transactions page component ────────────────────────────────────── */
 
 function transactionsPage(initialData, initialCategories, initialUsers, initialLimits = [], initialSpaces = []) {
