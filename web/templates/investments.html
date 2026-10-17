@@ -118,7 +118,7 @@
     </thead>
     <tbody>
     {% for op in operations %}
-    <tr>
+    <tr id="{{ op.kind }}-{{ op.id }}">
         <td data-label="Date">{{ op.happened_at[:10] }}</td>
         <td data-label="Type">
             <span class="op-pill op-{{ op.type }}">{{ op.type.replace("_", " ") }}</span>

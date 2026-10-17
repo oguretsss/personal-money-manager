@@ -2,6 +2,8 @@ from calendar import monthrange
 from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import case, literal, union_all
+from sqlalchemy import select as sa_select
 from sqlmodel import Session, select, func
 from datetime import datetime, timedelta, timezone
 import os
@@ -69,6 +71,7 @@ DEFAULT_INVESTMENT_ACCOUNT_BROKER = "Deutsche Bank MaxBlue"
 INVESTMENT_ASSET_TYPES = {"stock", "etf", "bond"}
 INVESTMENT_TRADE_SIDES = {"buy", "sell"}
 INVESTMENT_CASH_EVENT_TYPES = {"dividend", "coupon", "fee", "tax"}
+INVESTMENT_TRANSACTION_CATEGORY = "Investments"
 LIMIT_WARNING_PERCENT = 50
 LIMIT_CAUTION_PERCENT = 70
 LIMIT_EXCEEDED_PERCENT = 100
@@ -1161,38 +1164,63 @@ def admin_list_transactions(
     user_id: int | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
-    page: int = 1,
-    per_page: int = 50,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=1, le=10000),
+    include_investments: bool = False,
     session: Session = Depends(get_session),
 ):
-    stmt = select(Transaction, Category.name).join(Category, Transaction.category_id == Category.id)
-    if type:
-        stmt = stmt.where(Transaction.type == type)
-    if category:
-        stmt = stmt.where(Category.name == category)
-    if user_id:
-        stmt = stmt.where(Transaction.created_by_telegram_id == user_id)
-    if start:
-        stmt = stmt.where(Transaction.happened_at >= start)
-    if end:
-        stmt = stmt.where(Transaction.happened_at < end)
+    transactions = select(
+        Transaction.id, literal("transaction").label("source"), Transaction.type,
+        Transaction.amount_cents, Transaction.category_id, Category.name.label("category"),
+        Transaction.happened_at, Transaction.note, Transaction.created_by_telegram_id,
+        literal(None).label("asset_name"),
+    ).join(Category, Transaction.category_id == Category.id)
 
-    count_stmt = select(func.count()).select_from(Transaction).join(Category, Transaction.category_id == Category.id)
-    if type:
-        count_stmt = count_stmt.where(Transaction.type == type)
-    if category:
-        count_stmt = count_stmt.where(Category.name == category)
-    if user_id:
-        count_stmt = count_stmt.where(Transaction.created_by_telegram_id == user_id)
-    if start:
-        count_stmt = count_stmt.where(Transaction.happened_at >= start)
-    if end:
-        count_stmt = count_stmt.where(Transaction.happened_at < end)
-    total = session.exec(count_stmt).one()
+    if include_investments:
+        # Round fractional cents to even, as micros_price_to_cents does in the
+        # investment ledger. Integer arithmetic keeps totals exact in SQLite.
+        product = InvestmentTrade.quantity_micros * InvestmentTrade.unit_price_cents
+        whole_cents = product // QUANTITY_SCALE
+        remainder = product % QUANTITY_SCALE
+        gross_cents = whole_cents + case(
+            (remainder > QUANTITY_SCALE // 2, 1),
+            ((remainder == QUANTITY_SCALE // 2) & (whole_cents % 2 == 1), 1),
+            else_=0,
+        )
+        purchases = select(
+            InvestmentTrade.id, literal("investment_buy").label("source"),
+            literal("expense").label("type"),
+            (gross_cents + InvestmentTrade.fees_cents + InvestmentTrade.taxes_cents).label("amount_cents"),
+            literal(None).label("category_id"), literal(INVESTMENT_TRANSACTION_CATEGORY).label("category"),
+            InvestmentTrade.happened_at, InvestmentTrade.note, InvestmentTrade.created_by_telegram_id,
+            InvestmentAsset.name.label("asset_name"),
+        ).join(InvestmentAsset, InvestmentTrade.asset_id == InvestmentAsset.id).where(InvestmentTrade.side == "buy")
+        ledger = union_all(transactions, purchases).subquery()
+    else:
+        ledger = transactions.subquery()
 
-    stmt = stmt.order_by(Transaction.happened_at.desc(), Transaction.id.desc()).offset((page - 1) * per_page).limit(per_page)
+    stmt = sa_select(ledger)
+    if type:
+        stmt = stmt.where(ledger.c.type == type)
+    if category:
+        stmt = stmt.where(ledger.c.category == category)
+    if user_id:
+        stmt = stmt.where(ledger.c.created_by_telegram_id == user_id)
+    if start:
+        stmt = stmt.where(ledger.c.happened_at >= start)
+    if end:
+        stmt = stmt.where(ledger.c.happened_at < end)
+
+    filtered = stmt.subquery()
+    total, income_cents, expense_cents = session.exec(select(
+        func.count(),
+        func.coalesce(func.sum(case((filtered.c.type == "income", filtered.c.amount_cents), else_=0)), 0),
+        func.coalesce(func.sum(case((filtered.c.type == "expense", filtered.c.amount_cents), else_=0)), 0),
+    ).select_from(filtered)).one()
+
+    stmt = stmt.order_by(ledger.c.happened_at.desc(), ledger.c.id.desc(), ledger.c.source).offset((page - 1) * per_page).limit(per_page)
     rows = session.exec(stmt).all()
-    transaction_ids = [tx.id for tx, _ in rows]
+    transaction_ids = [tx.id for tx in rows if tx.source == "transaction"]
     income_sorts = (
         session.exec(select(IncomeSort).where(IncomeSort.transaction_id.in_(transaction_ids))).all()
         if transaction_ids
@@ -1204,13 +1232,20 @@ def admin_list_transactions(
         "total": total,
         "page": page,
         "per_page": per_page,
+        "totals": {
+            "income": income_cents / 100.0,
+            "expense": expense_cents / 100.0,
+            "net": (income_cents - expense_cents) / 100.0,
+        },
         "items": [
             {
                 "id": tx.id,
+                "source": tx.source,
                 "type": tx.type,
                 "amount": tx.amount_cents / 100.0,
-                "category": cat_name,
+                "category": tx.category,
                 "category_id": tx.category_id,
+                "asset_name": tx.asset_name,
                 "happened_at": tx.happened_at.isoformat(),
                 "note": tx.note,
                 "created_by_telegram_id": tx.created_by_telegram_id,
@@ -1220,11 +1255,11 @@ def admin_list_transactions(
                         "allocated_amount": sort_by_transaction[tx.id].amount_cents / 100.0,
                         "remaining_amount": (tx.amount_cents - sort_by_transaction[tx.id].amount_cents) / 100.0,
                     }
-                    if tx.id in sort_by_transaction
+                    if tx.source == "transaction" and tx.id in sort_by_transaction
                     else None
                 ),
             }
-            for tx, cat_name in rows
+            for tx in rows
         ],
     }
 

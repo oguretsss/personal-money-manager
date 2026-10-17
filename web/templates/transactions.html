@@ -29,6 +29,9 @@
                 Category
                 <select name="category">
                     <option value="">All</option>
+                    {% if 'Investments' not in categories | map(attribute='name') | list %}
+                    <option value="Investments" {% if filter_category == 'Investments' %}selected{% endif %}>Investments (expense)</option>
+                    {% endif %}
                     {% for c in categories %}
                     <option value="{{ c.name }}" {% if filter_category == c.name %}selected{% endif %}>{{ c.name }} ({{ c.type }})</option>
                     {% endfor %}
@@ -60,6 +63,20 @@
         </div>
     </form>
 </details>
+
+{% if (filter_type or filter_category or filter_user_id or filter_start or filter_end) and data.totals %}
+<section class="transaction-totals" aria-label="Filtered transaction totals">
+    <div class="transaction-totals-heading">
+        <strong>Total</strong>
+        <small>All {{ data.total }} matching transactions</small>
+    </div>
+    <dl>
+        <div><dt>Expenses</dt><dd class="text-red">&euro;{{ "%.2f"|format(data.totals.expense) }}</dd></div>
+        <div><dt>Income</dt><dd class="text-green">&euro;{{ "%.2f"|format(data.totals.income) }}</dd></div>
+        <div><dt>Net</dt><dd class="{% if data.totals.net >= 0 %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(data.totals.net) }}</dd></div>
+    </dl>
+</section>
+{% endif %}
 
 <!-- Income Sort Modal -->
 <div x-show="showIncomeSort" x-cloak class="modal-overlay" @click.self="showIncomeSort = false">
@@ -370,10 +387,13 @@
     <tr>
         <td data-label="Date">{{ tx.happened_at[:10] }}</td>
         <td data-label="Type">{{ tx.type }}</td>
-        <td data-label="Category">{{ tx.category }}</td>
+        <td data-label="Category"><span>{{ tx.category }}{% if tx.asset_name %}<small class="transaction-asset">{{ tx.asset_name }}</small>{% endif %}</span></td>
         <td data-label="Amount" class="amount {% if tx.type == 'income' %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(tx.amount) }}</td>
         <td data-label="Note">{{ tx.note }}</td>
         <td class="actions-cell">
+            {% if tx.source == 'investment_buy' %}
+            <a class="btn-sm" role="button" href="/investments#trade-{{ tx.id }}">View investment</a>
+            {% else %}
             {% if tx.type == 'income' and not tx.income_sort %}
             <button class="btn-sm btn-sort" @click="openIncomeSort(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Sort</button>
             {% endif %}
@@ -383,6 +403,7 @@
             {% else %}
             <button class="btn-sm" @click="openEdit(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Edit</button>
             <button class="btn-sm btn-danger" @click="confirmDelete({{ tx.id }})">Delete</button>
+            {% endif %}
             {% endif %}
         </td>
     </tr>

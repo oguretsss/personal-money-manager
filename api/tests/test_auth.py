@@ -38,6 +38,9 @@ from models import (
     IncomeSort,
     IncomeSortAllocation,
     IncomeSortTemplateItem,
+    InvestmentAccount,
+    InvestmentAsset,
+    InvestmentTrade,
     SpaceTransfer,
     Subscription,
     SubscriptionPayment,
@@ -102,6 +105,107 @@ class ApiAuthenticationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.headers["www-authenticate"], "Bearer")
+
+    def seed_transaction_ledger(self):
+        with Session(engine) as session:
+            cafe = Category(name="Cafe ledger", type="expense")
+            other = Category(name="Other ledger", type="expense")
+            salary = Category(name="Salary ledger", type="income")
+            account = InvestmentAccount(name="Ledger account")
+            asset = InvestmentAsset(isin="LEDGER123", name="Global ETF", asset_type="etf")
+            session.add_all([cafe, other, salary, account, asset])
+            session.commit()
+            session.add_all([
+                Transaction(type=kind, amount_cents=amount, category_id=cat.id,
+                            happened_at=date, created_by_telegram_id=user)
+                for kind, amount, cat, date, user in [
+                    ("expense", 1001, cafe, datetime(2026, 10, 10), 1015),
+                    ("expense", 2550, cafe, datetime(2026, 10, 12, 23, 59, 59), 1016),
+                    ("income", 100000, salary, datetime(2026, 10, 11), 1015),
+                    ("expense", 900, cafe, datetime(2026, 10, 13), 1015),
+                    ("expense", 500, other, datetime(2026, 10, 11), 1015),
+                ]
+            ])
+            for side, date in [("buy", datetime(2026, 10, 12, 12)),
+                               ("buy", datetime(2026, 10, 9)),
+                               ("sell", datetime(2026, 10, 12, 13))]:
+                session.add(InvestmentTrade(
+                    account_id=account.id, asset_id=asset.id, side=side,
+                    quantity_micros=1500000, unit_price_cents=1001,
+                    fees_cents=100, taxes_cents=25, happened_at=date,
+                    created_by_telegram_id=1015, note="Monthly buy",
+                ))
+            session.commit()
+
+    def test_combined_transactions_total_all_pages_without_creating_expenses(self):
+        self.seed_transaction_ledger()
+        params = {"include_investments": True, "start": "2026-10-10", "end": "2026-10-13", "per_page": 2}
+        items = []
+        for page in [1, 2, 3]:
+            response = self.client.get("/admin/transactions", params=dict(params, page=page), headers=self.bearer(ADMIN_TOKEN))
+            self.assertEqual(response.status_code, 200, response.text)
+            data = response.json()
+            self.assertEqual(data["total"], 5)
+            self.assertEqual(data["totals"], {"income": 1000, "expense": 56.78, "net": 943.22})
+            items.extend(data["items"])
+        self.assertEqual(len({(item["source"], item["id"]) for item in items}), 5)
+        self.assertEqual([item["happened_at"] for item in items], sorted([item["happened_at"] for item in items], reverse=True))
+        purchase = next(item for item in items if item["source"] == "investment_buy")
+        self.assertEqual(purchase["category"], "Investments")
+        self.assertEqual(purchase["asset_name"], "Global ETF")
+        self.assertEqual(purchase["amount"], 16.27)
+        self.assertIsNone(purchase["income_sort"])
+        with Session(engine) as session:
+            self.assertEqual(len(session.exec(select(Transaction)).all()), 5)
+        # Existing callers (including dashboard category limits) retain their scope.
+        data = self.client.get("/admin/transactions", params=dict(params, include_investments=False), headers=self.bearer(ADMIN_TOKEN)).json()
+        self.assertEqual(data["total"], 4)
+        self.assertEqual(data["totals"]["expense"], 40.51)
+
+    def test_combined_transaction_filters_and_empty_totals(self):
+        self.seed_transaction_ledger()
+        base = {"include_investments": True, "start": "2026-10-10", "end": "2026-10-13"}
+        cases = [
+            ({"category": "Investments"}, 1, 0, 16.27),
+            ({"category": "Cafe ledger"}, 2, 0, 35.51),
+            ({"type": "income"}, 1, 1000, 0),
+            ({"type": "expense"}, 4, 0, 56.78),
+            ({"user_id": 1015}, 4, 1000, 31.28),
+            ({"start": "2026-10-12"}, 2, 0, 41.77),
+            ({"category": "Investments", "user_id": 1016}, 0, 0, 0),
+            ({"category": "Investments", "type": "income"}, 0, 0, 0),
+        ]
+        for filters, count, income, expense in cases:
+            with self.subTest(filters=filters):
+                response = self.client.get("/admin/transactions", params=dict(base, **filters), headers=self.bearer(ADMIN_TOKEN))
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(response.json()["total"], count)
+                self.assertEqual(response.json()["totals"]["income"], income)
+                self.assertEqual(response.json()["totals"]["expense"], expense)
+
+    def test_purchase_projection_tracks_edits_deletes_and_rounds_fractional_cents(self):
+        self.seed_transaction_ledger()
+        with Session(engine) as session:
+            purchase = session.get(InvestmentTrade, 1)
+            purchase.unit_price_cents = 2000
+            session.add(purchase)
+            session.delete(session.get(InvestmentTrade, 2))
+            session.commit()
+        response = self.client.get("/admin/transactions", params={"include_investments": True, "category": "Investments"}, headers=self.bearer(ADMIN_TOKEN))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["total"], 1)
+        self.assertEqual(response.json()["totals"]["expense"], 31.25)
+        with Session(engine) as session:
+            purchase = session.get(InvestmentTrade, 1)
+            purchase.quantity_micros = 500000
+            purchase.fees_cents = purchase.taxes_cents = 0
+            for price, expected in [(1, 0), (3, 0.02), (5, 0.02), (7, 0.04)]:
+                purchase.unit_price_cents = price
+                session.add(purchase)
+                session.commit()
+                data = self.client.get("/admin/transactions", params={"include_investments": True, "category": "Investments"}, headers=self.bearer(ADMIN_TOKEN)).json()
+                self.assertEqual(data["items"][0]["amount"], expected)
+                self.assertEqual(data["totals"]["expense"], expected)
 
     def test_every_non_health_route_depends_on_authentication(self):
         def dependency_calls(dependant):

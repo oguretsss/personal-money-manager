@@ -176,7 +176,7 @@ def transactions_page(
         per_page=50,
     )
     try:
-        data = api.list_transactions(**params)
+        data = api.list_transactions(**params, include_investments=True)
         categories = api.list_categories()
         users = api.list_users()
         spaces = api.list_spaces()
@@ -278,7 +278,7 @@ def export_transactions_csv(
         per_page=10000,
     )
     try:
-        data = api.list_transactions(**params)
+        data = api.list_transactions(**params, include_investments=True)
     except httpx.HTTPError:
         data = {"items": []}
     output = io.StringIO()

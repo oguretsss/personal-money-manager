@@ -62,6 +62,7 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 .transaction-filters summary { font-size: 0.9rem; }
 .transaction-filters form { margin-bottom: 0; }
 .transaction-filters .page-actions { margin-bottom: 0; gap: 0.5rem; }
+.transaction-filters .page-actions > * { width: auto; margin: 0; }
 .filter-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.75rem; }
 .transactions-table td { vertical-align: middle; }
 .transactions-table td[data-label="Date"],
@@ -71,6 +72,23 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 .transactions-table td[data-label="Note"] { overflow-wrap: anywhere; }
 .transactions-table .actions-cell { width: 1%; }
 .transactions-table .btn-sm { margin: 0; }
+.transaction-asset { display: block; color: #90a4ae; font-size: 0.8rem; }
+.transaction-totals {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem 2rem;
+    margin-bottom: 1rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid #444;
+    border-radius: 8px;
+}
+.transaction-totals-heading { display: grid; gap: 0.15rem; }
+.transaction-totals-heading small, .transaction-totals dt { color: #90a4ae; font-size: 0.8rem; }
+.transaction-totals dl { display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; margin: 0; }
+.transaction-totals dd { margin: 0.1rem 0 0; font-weight: bold; font-variant-numeric: tabular-nums; }
+.responsive-table tr:target { outline: 2px solid var(--pico-primary); outline-offset: -2px; }
 
 /* Dashboard tables and charts share rows on larger screens. */
 .dashboard-details, .dashboard-category, .dashboard-charts {

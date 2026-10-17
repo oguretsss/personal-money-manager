@@ -14,12 +14,24 @@ A family budget management system with a FastAPI backend, Telegram bot frontend,
 - **Web Admin Panel** - Mobile-friendly reactive UI for managing all data
   - Dashboard with expense pie chart, financial summary, and monthly category-limit progress
   - Transaction management with add/edit/delete (no page reloads)
+  - Investment purchases in the transaction list under Investments, including fees and taxes, with links to the original trades
+  - Filtered totals for expenses, income, and net across all matching pages; date ranges include the selected last day
   - One-step income sorting with allocation preview, cash remainder, saved templates, and undo
   - Quick expense button (FAB) accessible from every page
   - Responsive design — tables convert to cards on mobile
   - Categories, monthly spending limits, and spaces management with inline editing
   - Subscription CRUD, month history, and one-click expense creation
   - Non-blocking 50%, 70%, and 100% limit warnings while adding expenses
+
+## Transaction List API
+
+`GET /admin/transactions` returns `totals` (`income`, `expense`, and `net`) for
+the complete filtered selection before pagination. Set `include_investments=true`
+to include investment purchases; the web transaction list and CSV export enable
+this automatically. Purchase entries have `source: "investment_buy"` and use their
+trade ID, while ordinary entries have `source: "transaction"`. Use both fields
+to identify an entry. Investment entries are managed through the investment
+endpoints and do not create additional budget expenses.
 
 ## Tech Stack
 
