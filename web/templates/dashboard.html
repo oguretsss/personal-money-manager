@@ -119,7 +119,9 @@
 </section>
 {% endif %}
 
+<div class="dashboard-details">
 {% if summary.spaces %}
+<section class="dashboard-panel">
 <h3>Spaces</h3>
 <table class="responsive-table">
     <thead><tr><th>Space</th><th class="text-right">Balance</th></tr></thead>
@@ -129,9 +131,11 @@
     {% endfor %}
     </tbody>
 </table>
+</section>
 {% endif %}
 
 {% if summary.investment_holdings %}
+<section class="dashboard-panel">
 <h3>Investments</h3>
 <table class="responsive-table">
     <thead><tr><th>Asset</th><th>Type</th><th class="text-right">Market Value</th><th class="text-right">Unrealized P/L</th></tr></thead>
@@ -148,14 +152,18 @@
     {% endfor %}
     </tbody>
 </table>
+</section>
 {% endif %}
+</div>
 
 {% if summary.by_category %}
+<section class="dashboard-panel">
 <h3>This Month by Category</h3>
+<div class="dashboard-category">
 
 {% set expense_cats = summary.by_category | selectattr("type", "equalto", "expense") | list %}
 {% if expense_cats %}
-<div style="max-width: 100%; margin: 0 auto 2rem;">
+<div class="chart-frame chart-frame-pie">
     <canvas id="expensePie"></canvas>
 </div>
 {% endif %}
@@ -172,6 +180,8 @@
     {% endfor %}
     </tbody>
 </table>
+</div>
+</section>
 {% endif %}
 
 {% else %}
@@ -182,20 +192,28 @@
 
 {% set month_names = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] %}
 
+<div class="dashboard-charts">
 {% if trends and trends | length > 1 %}
+<section class="dashboard-panel">
 <h3>Income vs Expenses (Last {{ trends | length }} Months)</h3>
-<div style="max-width: 100%; margin: 0 auto 2rem;">
+<div class="chart-frame">
     <canvas id="trendsChart"></canvas>
 </div>
+</section>
 {% endif %}
 
 {% if average_spending and average_spending['items'] %}
+<section class="dashboard-panel">
 <h3>Average Spending By Category ({{ average_spending.months }}-Month Average)</h3>
 <p><small>Uses the available completed months, up to {{ average_spending.requested_months }}; the current month is excluded.</small></p>
-<div style="height: {{ [320, average_spending['items'] | length * 42] | max }}px; max-width: 100%; margin: 0 auto 2rem;">
+<div class="chart-scroll">
+<div class="chart-frame" style="height: {{ [260, average_spending['items'] | length * 28] | max }}px;">
     <canvas id="averageSpendingCategoryChart"></canvas>
 </div>
+</div>
+</section>
 {% endif %}
+</div>
 
 {% if trends and trends | length > 1 %}
 <!-- Monthly Summary Table -->
@@ -313,6 +331,8 @@ new Chart(document.getElementById('expensePie'), {
         }]
     },
     options: {
+        responsive: true,
+        maintainAspectRatio: false,
         plugins: {
             legend: { position: window.innerWidth < 768 ? 'bottom' : 'right' },
             tooltip: {
@@ -346,6 +366,7 @@ new Chart(document.getElementById('trendsChart'), {
     },
     options: {
         responsive: true,
+        maintainAspectRatio: false,
         plugins: {
             legend: { position: 'top' },
             tooltip: {
