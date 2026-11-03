@@ -326,8 +326,11 @@ function fabExpense() {
                 const hasLimitAlert = announceLimitStatus(result);
                 this.showModal = false;
                 Alpine.store('app').invalidate();
-                // Reload page to reflect new data
-                setTimeout(() => window.location.reload(), hasLimitAlert ? 1800 : 500);
+                // Transactions refreshes its loaded rows without losing the scroll position.
+                const event = new CustomEvent('transactions-changed', { cancelable: true });
+                if (window.dispatchEvent(event)) {
+                    setTimeout(() => window.location.reload(), hasLimitAlert ? 1800 : 500);
+                }
             }
         },
     };
@@ -393,12 +396,20 @@ function categoryLimitCard(category, period) {
 
 /* ── Transactions page component ────────────────────────────────────── */
 
-function transactionsPage(initialData, initialCategories, initialUsers, initialLimits = [], initialSpaces = []) {
+function transactionsPage(initialData, initialCategories, initialUsers, initialLimits = [], initialSpaces = [], filters = {}) {
+    let observer;
+    let requestVersion = 0;
     return {
         transactions: initialData.items || [],
         total: initialData.total || 0,
         page: initialData.page || 1,
         perPage: initialData.per_page || 50,
+        totals: initialData.totals || { income: 0, expense: 0, net: 0 },
+        filters,
+        loadingMore: false,
+        refreshing: false,
+        listError: initialData.load_error ? 'Unable to load transactions.' : '',
+        needsRefresh: Boolean(initialData.load_error),
         categories: initialCategories || [],
         users: initialUsers || [],
         limits: initialLimits || [],
@@ -450,6 +461,163 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             if (this.users.length && !this.csvImportUserId) {
                 this.csvImportUserId = this.users[0].telegram_id;
             }
+            this.$nextTick(() => {
+                if (typeof IntersectionObserver !== 'undefined') {
+                    observer = new IntersectionObserver(entries => {
+                        if (entries.some(entry => entry.isIntersecting) && !this.listError) {
+                            this.loadMore();
+                        }
+                    }, { rootMargin: '400px 0px' });
+                    this.observeMore();
+                }
+            });
+        },
+
+        destroy() {
+            requestVersion++;
+            if (observer) observer.disconnect();
+        },
+
+        transactionKey(tx) {
+            return `${tx.source || 'transaction'}:${tx.id}`;
+        },
+
+        get hasMore() {
+            return this.page * this.perPage < this.total;
+        },
+
+        observeMore() {
+            if (!observer) return;
+            observer.disconnect();
+            if (this.hasMore && !this.listError && !this.refreshing) {
+                observer.observe(this.$refs.loadMore);
+            }
+        },
+
+        transactionListUrl(page) {
+            const params = new URLSearchParams({ page, per_page: this.perPage, include_investments: true });
+            for (const key of ['type', 'category', 'user_id', 'start', 'end']) {
+                if (this.filters[key]) params.set(key, this.filters[key]);
+            }
+            return `/api/transactions?${params}`;
+        },
+
+        async loadMore() {
+            if (this.loadingMore || this.refreshing || this.needsRefresh || !this.hasMore) return;
+            const version = requestVersion;
+            this.loadingMore = true;
+            this.listError = '';
+            try {
+                const data = await apiCall('GET', this.transactionListUrl(this.page + 1));
+                if (version !== requestVersion) return;
+                if (!data) throw new Error('Unable to load transactions.');
+                // Transaction and investment IDs come from separate tables.
+                const keys = new Set(this.transactions.map(tx => this.transactionKey(tx)));
+                for (const tx of data.items) {
+                    const key = this.transactionKey(tx);
+                    if (!keys.has(key)) {
+                        this.transactions.push(tx);
+                        keys.add(key);
+                    }
+                }
+                this.total = data.total;
+                this.totals = data.totals || this.totals;
+                this.page = data.page;
+                // An empty page ends loading even if another writer changed the count.
+                if (!data.items.length) this.total = this.transactions.length;
+            } catch {
+                if (version === requestVersion) this.listError = 'Unable to load more transactions.';
+            } finally {
+                if (version === requestVersion) {
+                    this.loadingMore = false;
+                    await this.$nextTick();
+                    this.observeMore();
+                }
+            }
+        },
+
+        captureScrollAnchor() {
+            const rows = this.$refs.transactionRows.querySelectorAll('[data-transaction-key]');
+            return {
+                y: window.scrollY,
+                rows: Array.from(rows).map(row => ({
+                    key: row.dataset.transactionKey,
+                    top: row.getBoundingClientRect().top,
+                    bottom: row.getBoundingClientRect().bottom,
+                })).filter(row => row.bottom > 0 && row.top < window.innerHeight),
+            };
+        },
+
+        restoreScrollAnchor(anchor) {
+            const rows = Array.from(this.$refs.transactionRows.querySelectorAll('[data-transaction-key]'));
+            for (const previous of anchor.rows) {
+                const row = rows.find(item => item.dataset.transactionKey === previous.key);
+                if (row) {
+                    window.scrollBy(0, row.getBoundingClientRect().top - previous.top);
+                    return;
+                }
+            }
+            window.scrollTo(0, anchor.y);
+        },
+
+        async refreshTransactions() {
+            const version = ++requestVersion;
+            const pagesToLoad = this.page;
+            this.refreshing = true;
+            this.loadingMore = false;
+            this.needsRefresh = true;
+            this.listError = '';
+            if (observer) observer.disconnect();
+            try {
+                const items = [];
+                const keys = new Set();
+                let data;
+                // Reload the loaded prefix so mutations cannot shift offset pagination.
+                for (let page = 1; page <= pagesToLoad; page++) {
+                    data = await apiCall('GET', this.transactionListUrl(page));
+                    if (version !== requestVersion) return;
+                    if (!data) throw new Error('Unable to refresh transactions.');
+                    for (const tx of data.items) {
+                        const key = this.transactionKey(tx);
+                        if (!keys.has(key)) {
+                            items.push(tx);
+                            keys.add(key);
+                        }
+                    }
+                    if (!data.items.length || page * this.perPage >= data.total) break;
+                }
+                const anchor = this.captureScrollAnchor();
+                this.transactions = items;
+                this.total = data.items.length ? data.total : items.length;
+                this.totals = data.totals || this.totals;
+                this.page = data.page;
+                this.needsRefresh = false;
+                await this.$nextTick();
+                if (version === requestVersion) this.restoreScrollAnchor(anchor);
+            } catch {
+                if (version === requestVersion) this.listError = 'Unable to refresh transactions. Retry to see the latest changes.';
+            } finally {
+                if (version === requestVersion) {
+                    this.refreshing = false;
+                    await this.$nextTick();
+                    this.observeMore();
+                }
+            }
+        },
+
+        async transactionsChanged() {
+            Alpine.store('app').invalidate();
+            await this.refreshTransactions();
+            // Keep category choices and expense limit previews current after mutations.
+            const [categories, limits] = await Promise.allSettled([
+                Alpine.store('app').fetchCategories(), Alpine.store('app').fetchLimits(),
+            ]);
+            if (categories.status === 'fulfilled') this.categories = categories.value;
+            if (limits.status === 'fulfilled') this.limits = limits.value;
+        },
+
+        retryList() {
+            return this.needsRefresh ? this.refreshTransactions() : this.loadMore();
         },
 
         expenseCategories() {
@@ -576,8 +744,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
                     'success',
                 );
                 this.showIncomeSort = false;
-                Alpine.store('app').invalidate();
-                window.location.reload();
+                await this.transactionsChanged();
             }
         },
 
@@ -593,8 +760,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             if (result) {
                 Alpine.store('toast').add('Income sort undone', 'success');
                 this.showUndoSortConfirm = false;
-                Alpine.store('app').invalidate();
-                window.location.reload();
+                await this.transactionsChanged();
             }
         },
 
@@ -777,12 +943,12 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             if (created && !failed) {
                 Alpine.store('toast').add(`${created} expense(s) imported`, 'success');
                 this.showCsvImport = false;
-                Alpine.store('app').invalidate();
-                window.location.reload();
+                await this.transactionsChanged();
                 return;
             }
             if (created) {
                 Alpine.store('toast').add(`${created} imported, ${failed} failed`, 'info');
+                await this.transactionsChanged();
             }
         },
 
@@ -806,14 +972,9 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             this.loading = false;
             if (result) {
                 Alpine.store('toast').add('Transaction created', 'success');
-                const hasLimitAlert = announceLimitStatus(result);
+                announceLimitStatus(result);
                 this.showAdd = false;
-                Alpine.store('app').invalidate();
-                if (hasLimitAlert) {
-                    setTimeout(() => window.location.reload(), 1800);
-                } else {
-                    window.location.reload();
-                }
+                await this.transactionsChanged();
             }
         },
 
@@ -844,7 +1005,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             if (result) {
                 Alpine.store('toast').add('Transaction updated', 'success');
                 this.showEdit = false;
-                window.location.reload();
+                await this.transactionsChanged();
             }
         },
 
@@ -860,7 +1021,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             if (result) {
                 Alpine.store('toast').add('Transaction deleted', 'success');
                 this.showConfirm = false;
-                window.location.reload();
+                await this.transactionsChanged();
             }
         },
     };

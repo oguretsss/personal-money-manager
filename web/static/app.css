@@ -73,6 +73,10 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 .transactions-table .actions-cell { width: 1%; }
 .transactions-table .btn-sm { margin: 0; }
 .transaction-asset { display: block; color: #90a4ae; font-size: 0.8rem; }
+.transaction-loader { min-height: 5rem; padding: 0.75rem 0 2rem; text-align: center; }
+.transaction-loader p { margin: 0 0 0.5rem; color: #90a4ae; font-size: 0.85rem; }
+.transaction-loader [role="status"] { display: grid; gap: 0.35rem; }
+.transaction-loader button { width: auto; margin: 0; }
 .transaction-totals {
     display: flex;
     justify-content: space-between;

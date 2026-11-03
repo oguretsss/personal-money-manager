@@ -2,8 +2,9 @@
 {% set active = "transactions" %}
 {% block title %}Transactions - MoneyManage Admin{% endblock %}
 {% block content %}
-<script id="tx-init-data" type="application/json">{{ {"data": data, "categories": categories, "users": users, "limits": limits, "spaces": spaces} | tojson }}</script>
-<div x-data="(() => { const d = JSON.parse(document.getElementById('tx-init-data').textContent); return transactionsPage(d.data, d.categories, d.users, d.limits, d.spaces); })()">
+<script id="tx-init-data" type="application/json">{{ {"data": data, "categories": categories, "users": users, "limits": limits, "spaces": spaces, "filters": {"type": filter_type, "category": filter_category, "user_id": filter_user_id, "start": filter_start, "end": filter_end}} | tojson }}</script>
+<div x-data="(() => { const d = JSON.parse(document.getElementById('tx-init-data').textContent); return transactionsPage(d.data, d.categories, d.users, d.limits, d.spaces, d.filters); })()"
+     @transactions-changed.window="$event.preventDefault(); transactionsChanged()">
 <div class="page-toolbar">
     <h2>Transactions</h2>
     <div class="page-actions">
@@ -64,16 +65,16 @@
     </form>
 </details>
 
-{% if (filter_type or filter_category or filter_user_id or filter_start or filter_end) and data.totals %}
+{% if filter_type or filter_category or filter_user_id or filter_start or filter_end %}
 <section class="transaction-totals" aria-label="Filtered transaction totals">
     <div class="transaction-totals-heading">
         <strong>Total</strong>
-        <small>All {{ data.total }} matching transactions</small>
+        <small x-text="`All ${total} matching transactions`">All {{ data.total }} matching transactions</small>
     </div>
     <dl>
-        <div><dt>Expenses</dt><dd class="text-red">&euro;{{ "%.2f"|format(data.totals.expense) }}</dd></div>
-        <div><dt>Income</dt><dd class="text-green">&euro;{{ "%.2f"|format(data.totals.income) }}</dd></div>
-        <div><dt>Net</dt><dd class="{% if data.totals.net >= 0 %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(data.totals.net) }}</dd></div>
+        <div><dt>Expenses</dt><dd class="text-red" x-text="formatMoney(totals.expense)">&euro;{{ "%.2f"|format(data.get('totals', {}).get('expense', 0)) }}</dd></div>
+        <div><dt>Income</dt><dd class="text-green" x-text="formatMoney(totals.income)">&euro;{{ "%.2f"|format(data.get('totals', {}).get('income', 0)) }}</dd></div>
+        <div><dt>Net</dt><dd :class="totals.net >= 0 ? 'text-green' : 'text-red'" x-text="formatMoney(totals.net)">&euro;{{ "%.2f"|format(data.get('totals', {}).get('net', 0)) }}</dd></div>
     </dl>
 </section>
 {% endif %}
@@ -382,51 +383,57 @@
             <th>Actions</th>
         </tr>
     </thead>
-    <tbody>
-    {% for tx in data["items"] %}
-    <tr>
-        <td data-label="Date">{{ tx.happened_at[:10] }}</td>
-        <td data-label="Type">{{ tx.type }}</td>
-        <td data-label="Category"><span>{{ tx.category }}{% if tx.asset_name %}<small class="transaction-asset">{{ tx.asset_name }}</small>{% endif %}</span></td>
-        <td data-label="Amount" class="amount {% if tx.type == 'income' %}text-green{% else %}text-red{% endif %}">&euro;{{ "%.2f"|format(tx.amount) }}</td>
-        <td data-label="Note">{{ tx.note }}</td>
+    <tbody x-ref="transactionRows" :aria-busy="loadingMore || refreshing">
+    <template x-for="tx in transactions" :key="transactionKey(tx)">
+    <tr :data-transaction-key="transactionKey(tx)">
+        <td data-label="Date" x-text="tx.happened_at.slice(0, 10)"></td>
+        <td data-label="Type" x-text="tx.type"></td>
+        <td data-label="Category"><span><span x-text="tx.category"></span><small class="transaction-asset" x-show="tx.asset_name" x-text="tx.asset_name"></small></span></td>
+        <td data-label="Amount" class="amount" :class="tx.type === 'income' ? 'text-green' : 'text-red'" x-text="formatMoney(tx.amount)"></td>
+        <td data-label="Note" x-text="tx.note"></td>
         <td class="actions-cell">
-            {% if tx.source == 'investment_buy' %}
-            <a class="btn-sm" role="button" href="/investments#trade-{{ tx.id }}">View investment</a>
-            {% else %}
-            {% if tx.type == 'income' and not tx.income_sort %}
-            <button class="btn-sm btn-sort" @click="openIncomeSort(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Sort</button>
-            {% endif %}
-            {% if tx.income_sort %}
-            <span class="income-sort-badge">Sorted &euro;{{ "%.2f"|format(tx.income_sort.allocated_amount) }}</span>
-            <button class="btn-sm btn-danger" @click="confirmUndoIncomeSort({{ tx.id }})">Undo sort</button>
-            {% else %}
-            <button class="btn-sm" @click="openEdit(JSON.parse(decodeURIComponent($el.dataset.tx)))" data-tx="{{ tx | tojson | urlencode }}">Edit</button>
-            <button class="btn-sm btn-danger" @click="confirmDelete({{ tx.id }})">Delete</button>
-            {% endif %}
-            {% endif %}
+            <template x-if="tx.source === 'investment_buy'">
+                <a class="btn-sm" role="button" :href="`/investments#trade-${tx.id}`">View investment</a>
+            </template>
+            <template x-if="tx.source !== 'investment_buy'">
+                <span>
+                    <template x-if="tx.type === 'income' && !tx.income_sort">
+                        <button class="btn-sm btn-sort" @click="openIncomeSort(tx)">Sort</button>
+                    </template>
+                    <template x-if="tx.income_sort">
+                        <span>
+                            <span class="income-sort-badge" x-text="`Sorted ${formatMoney(tx.income_sort.allocated_amount)}`"></span>
+                            <button class="btn-sm btn-danger" @click="confirmUndoIncomeSort(tx.id)">Undo sort</button>
+                        </span>
+                    </template>
+                    <template x-if="!tx.income_sort">
+                        <span>
+                            <button class="btn-sm" @click="openEdit(tx)">Edit</button>
+                            <button class="btn-sm btn-danger" @click="confirmDelete(tx.id)">Delete</button>
+                        </span>
+                    </template>
+                </span>
+            </template>
         </td>
     </tr>
-    {% endfor %}
-    {% if not data["items"] %}
-    <tr><td colspan="6">No transactions found.</td></tr>
-    {% endif %}
+    </template>
+    <tr x-show="!transactions.length && !listError && !refreshing" x-cloak><td colspan="6">No transactions found.</td></tr>
     </tbody>
 </table>
 
-<!-- Pagination -->
-{% set total_pages = (data.total + data.per_page - 1) // data.per_page %}
-{% if total_pages > 1 %}
-<nav>
-    <ul>
-        {% for p in range(1, total_pages + 1) %}
-        <li>
-            <a href="/transactions?page={{ p }}{% if filter_type %}&type={{ filter_type }}{% endif %}{% if filter_category %}&category={{ filter_category }}{% endif %}{% if filter_user_id %}&user_id={{ filter_user_id }}{% endif %}{% if filter_start %}&start={{ filter_start }}{% endif %}{% if filter_end %}&end={{ filter_end }}{% endif %}"
-               {% if p == data.page %}aria-current="page"{% endif %}>{{ p }}</a>
-        </li>
-        {% endfor %}
-    </ul>
-</nav>
-{% endif %}
+<div class="transaction-loader" x-ref="loadMore" x-cloak>
+    <p role="status" aria-live="polite">
+        <span x-text="`${transactions.length} of ${total} transactions`"></span>
+        <span x-show="loadingMore || refreshing" :aria-busy="loadingMore || refreshing"
+              x-text="refreshing ? 'Updating…' : 'Loading…'"></span>
+        <span x-show="!hasMore && total > 0 && !listError && !refreshing">All transactions loaded.</span>
+    </p>
+    <div x-show="listError">
+        <p role="alert" x-text="listError"></p>
+        <button type="button" class="secondary btn-sm" @click="retryList()" :disabled="loadingMore || refreshing">Retry</button>
+    </div>
+    <button type="button" class="secondary btn-sm" x-show="hasMore && !listError"
+            @click="loadMore()" :disabled="loadingMore || refreshing">Load more</button>
+</div>
 </div>
 {% endblock %}

@@ -1,5 +1,7 @@
 import importlib.util
+import json
 import os
+import re
 from pathlib import Path
 import sys
 import unittest
@@ -80,11 +82,38 @@ class DashboardLimitTransactionTests(unittest.TestCase):
     def test_transactions_include_purchases_with_safe_investment_actions(self):
         html, params = self.transaction_page()
         self.assertTrue(params["include_investments"])
-        self.assertIn('/investments#trade-1', html)
+        self.assertIn('x-if="tx.source === \'investment_buy\'"', html)
+        self.assertIn(':href="`/investments#trade-${tx.id}`"', html)
         self.assertIn('Global ETF', html)
         self.assertNotIn('confirmDelete(1)', html)
         self.assertNotIn('aria-label="Filtered transaction totals"', html)
         self.assertIn('<option value="Investments"', html)
+
+    def test_scroll_proxy_preserves_investments_and_all_filters(self):
+        data = {"items": [], "total": 51, "page": 2, "per_page": 50}
+        with patch.object(self.web.api, "list_transactions", return_value=data) as fetch:
+            response = self.client.get('/api/transactions', params={
+                'page': 2, 'per_page': 50, 'include_investments': 'true',
+                'type': 'expense', 'category': "Cafe & O'Brien", 'user_id': '123',
+                'start': '2026-11-01', 'end': '2026-11-03',
+            })
+        self.assertEqual(response.status_code, 200)
+        fetch.assert_called_once_with(
+            page=2, per_page=50, include_investments=True, type='expense',
+            category="Cafe & O'Brien", user_id=123,
+            start='2026-11-01T00:00:00', end='2026-11-04T00:00:00',
+        )
+
+    def test_scroll_starts_from_first_page_with_filters_and_no_page_links(self):
+        html, params = self.transaction_page('?page=4&category=Cafe%20%26%20Bar&user_id=123&end=2026-11-03')
+        self.assertEqual(params['page'], 1)
+        self.assertNotIn('/transactions?page=', html)
+        self.assertIn('x-ref="loadMore"', html)
+        self.assertIn('@transactions-changed.window=', html)
+        initial = json.loads(re.search(r'<script id="tx-init-data"[^>]*>(.*?)</script>', html).group(1))
+        self.assertEqual(initial['filters']['category'], 'Cafe & Bar')
+        self.assertEqual(initial['filters']['user_id'], 123)
+        self.assertEqual(initial['filters']['end'], '2026-11-03')
 
     def test_any_filter_displays_totals_for_all_matching_pages(self):
         for query in ["?type=expense", "?category=Investments", "?user_id=123", "?start=2026-10-10", "?end=2026-10-12"]:

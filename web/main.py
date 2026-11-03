@@ -163,7 +163,6 @@ def transactions_page(
     user_id: str | None = None,
     start: str | None = None,
     end: str | None = None,
-    page: int = 1,
 ):
     filter_user_id = normalize_user_id(user_id)
     params = build_transaction_list_params(
@@ -172,7 +171,7 @@ def transactions_page(
         user_id=filter_user_id,
         start=start,
         end=end,
-        page=page,
+        page=1,
         per_page=50,
     )
     try:
@@ -181,7 +180,7 @@ def transactions_page(
         users = api.list_users()
         spaces = api.list_spaces()
     except httpx.HTTPError:
-        data = {"items": [], "total": 0, "page": 1, "per_page": 50}
+        data = {"items": [], "total": 0, "page": 1, "per_page": 50, "load_error": True}
         categories = []
         users = []
         spaces = []
@@ -509,9 +508,10 @@ def api_list_transactions(
     end: str | None = None,
     page: int = 1,
     per_page: int = 50,
+    include_investments: bool = False,
 ):
     try:
-        return api.list_transactions(**build_transaction_list_params(
+        params = build_transaction_list_params(
             type=type,
             category=category,
             user_id=user_id,
@@ -519,7 +519,10 @@ def api_list_transactions(
             end=end,
             page=page,
             per_page=per_page,
-        ))
+        )
+        if include_investments:
+            params["include_investments"] = True
+        return api.list_transactions(**params)
     except httpx.HTTPError as e:
         return _error_json(e)
 
