@@ -3,7 +3,7 @@ import io
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Form, Depends, Body
+from fastapi import FastAPI, Request, Form, Depends, Body, HTTPException, Query
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -122,27 +122,42 @@ def logout():
 # ── Dashboard ──────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, _user: str = Depends(require_login)):
+def dashboard(
+    request: Request,
+    _user: str = Depends(require_login),
+    period: str | None = Query(default=None, pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$"),
+):
+    current_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    current_period = f"{current_month.year:04d}-{current_month.month:02d}"
+    period = period or current_period
+    if period < "0002-01" or period > current_period:
+        raise HTTPException(status_code=400, detail="Select a month up to the current month")
+    selected_month = datetime.fromisoformat(period + "-01")
+    selected_period = {"year": selected_month.year, "month": selected_month.month}
     try:
-        summary = api.get_summary()
+        summary = api.get_summary(**selected_period)
         users = api.list_users()
     except httpx.HTTPError:
         summary = None
         users = []
     try:
-        trends = api.get_monthly_trends(12)
+        trends = api.get_monthly_trends(12, **selected_period)
     except httpx.HTTPError:
         trends = []
     try:
-        average_spending = api.get_average_spending_by_category(12)
+        average_spending = api.get_average_spending_by_category(12, **selected_period)
     except httpx.HTTPError:
         average_spending = None
     try:
-        limits = api.list_limits()
+        limits = api.list_limits(**selected_period)
     except httpx.HTTPError:
         limits = []
     return templates.TemplateResponse(request, "dashboard.html", {
         "request": request,
+        "period": period,
+        "current_period": current_period,
+        "month_label": selected_month.strftime("%B %Y"),
+        "is_current": period == current_period,
         "summary": summary,
         "users": users,
         "trends": trends,

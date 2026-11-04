@@ -18,8 +18,9 @@ class AdminApiClient:
             headers={"Authorization": f"Bearer {API_ADMIN_TOKEN}"},
         )
 
-    def get_summary(self) -> dict:
-        r = self._client.get("/admin/summary")
+    def get_summary(self, year: int | None = None, month: int | None = None) -> dict:
+        params = {k: v for k, v in {"year": year, "month": month}.items() if v is not None}
+        r = self._client.get("/admin/summary", params=params)
         r.raise_for_status()
         return r.json()
 
@@ -150,15 +151,17 @@ class AdminApiClient:
         r.raise_for_status()
         return r.json()
 
-    def get_monthly_trends(self, months: int = 12) -> list:
-        r = self._client.get("/admin/analytics/monthly-trends", params={"months": months})
+    def get_monthly_trends(self, months: int = 12, year: int | None = None, month: int | None = None) -> list:
+        params = {k: v for k, v in {"months": months, "year": year, "month": month}.items() if v is not None}
+        r = self._client.get("/admin/analytics/monthly-trends", params=params)
         r.raise_for_status()
         return r.json()
 
-    def get_average_spending_by_category(self, months: int = 12) -> dict:
+    def get_average_spending_by_category(self, months: int = 12, year: int | None = None, month: int | None = None) -> dict:
+        params = {k: v for k, v in {"months": months, "year": year, "month": month}.items() if v is not None}
         r = self._client.get(
             "/admin/analytics/average-spending-by-category",
-            params={"months": months},
+            params=params,
         )
         r.raise_for_status()
         return r.json()

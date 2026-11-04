@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 import sys
 import unittest
@@ -57,6 +58,66 @@ class DashboardLimitTransactionTests(unittest.TestCase):
             response = self.client.get("/api/transactions", params={"category": "Cafe"})
         self.assertEqual(response.status_code, 401)
         list_transactions.assert_not_called()
+
+    def dashboard_page(self, query=""):
+        summary = {
+            "cash_balance": 552, "spaces_total": 230, "total_assets": 932,
+            "income_total": 0, "expense_total": 100,
+            "spaces": [], "by_category": [],
+        }
+        with patch.object(self.web.templates.env, "loader", FileSystemLoader(WEB_DIR / "templates")), patch.multiple(
+            self.web.api, get_summary=Mock(return_value=summary), list_users=Mock(return_value=[]),
+            get_monthly_trends=Mock(return_value=[]),
+            get_average_spending_by_category=Mock(return_value=None), list_limits=Mock(return_value=[]),
+        ):
+            response = self.client.get("/" + query)
+            self.assertEqual(response.status_code, 200, response.text)
+            selected = self.web.api.get_summary.call_args.kwargs
+            self.web.api.get_monthly_trends.assert_called_once_with(12, **selected)
+            self.web.api.get_average_spending_by_category.assert_called_once_with(12, **selected)
+            self.web.api.list_limits.assert_called_once_with(**selected)
+        return response.text, selected
+
+    def test_dashboard_month_picker_loads_all_sections_for_selected_month(self):
+        html, selected = self.dashboard_page("?period=2020-12")
+        self.assertEqual(selected, {"year": 2020, "month": 12})
+        self.assertIn('name="period" type="month" value="2020-12"', html)
+        self.assertIn('Balances at the end of December 2020', html)
+        self.assertIn('Current month</a>', html)
+        self.assertNotIn('Expenses This Month', html)
+
+    def test_dashboard_defaults_to_current_month(self):
+        html, selected = self.dashboard_page()
+        now = datetime.utcnow()
+        self.assertEqual(selected, {"year": now.year, "month": now.month})
+        self.assertIn('Current status', html)
+        self.assertIn('Expenses This Month', html)
+        self.assertNotIn('Current month</a>', html)
+
+    def test_dashboard_rejects_invalid_and_future_months_before_calling_api(self):
+        for period in ["invalid", "2020-13", "0000-01", "0001-01", "9999-01"]:
+            with self.subTest(period=period), patch.object(self.web.api, "get_summary") as fetch:
+                response = self.client.get("/", params={"period": period})
+                self.assertIn(response.status_code, [400, 422])
+                fetch.assert_not_called()
+
+    def test_dashboard_requires_login(self):
+        self.client.cookies.clear()
+        with patch.object(self.web.api, "get_summary") as fetch:
+            response = self.client.get("/?period=2020-12", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/login")
+        fetch.assert_not_called()
+
+    def test_dashboard_api_client_forwards_month_to_all_report_endpoints(self):
+        for method, args in [("get_summary", ()), ("get_monthly_trends", (12,)),
+                             ("get_average_spending_by_category", (12,))]:
+            with self.subTest(method=method), patch.object(self.web.api._client, "get") as fetch:
+                fetch.return_value.json.return_value = {}
+                getattr(self.web.api, method)(*args, year=2020, month=12)
+                params = fetch.call_args.kwargs["params"]
+                self.assertEqual(params["year"], 2020)
+                self.assertEqual(params["month"], 12)
 
     def transaction_page(self, query="", *, empty=False):
         data = {

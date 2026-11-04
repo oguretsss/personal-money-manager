@@ -111,8 +111,16 @@ def resolve_limit_period(year: int | None, month: int | None) -> tuple[datetime,
         return month_bounds(datetime.utcnow())
     try:
         return month_bounds(datetime(year, month, 1))
-    except ValueError as exc:
+    except (ValueError, OverflowError) as exc:
         raise HTTPException(status_code=400, detail="Invalid year or month") from exc
+
+
+def resolve_dashboard_period(year: int | None, month: int | None) -> tuple[datetime, datetime]:
+    start, end = resolve_limit_period(year, month)
+    current_start, _ = month_bounds(datetime.utcnow())
+    if start < datetime(2, 1, 1) or start > current_start:
+        raise HTTPException(status_code=400, detail="Select a month between 0002-01 and the current month")
+    return start, end
 
 
 def build_limit_progress(
@@ -251,17 +259,22 @@ def list_investment_accounts(session: Session) -> list[InvestmentAccount]:
     return session.exec(select(InvestmentAccount).order_by(InvestmentAccount.name)).all()
 
 
-def list_space_balances(session: Session) -> tuple[int, list[dict]]:
+def list_space_balances(session: Session, before: datetime | None = None) -> tuple[int, list[dict]]:
     spaces = session.exec(select(Space)).all()
     spaces_total_c = 0
     space_items = []
 
     for sp in spaces:
-        rows = session.exec(
+        stmt = (
             select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
             .where(SpaceTransfer.space_id == sp.id)
             .group_by(SpaceTransfer.direction)
-        ).all()
+        )
+        if before is not None:
+            stmt = stmt.where(SpaceTransfer.happened_at < before)
+        rows = session.exec(stmt).all()
+        if before is not None and sp.created_at >= before and not rows:
+            continue
 
         to_c = sum(int(s or 0) for d, s in rows if d == "to_space")
         from_c = sum(int(s or 0) for d, s in rows if d == "from_space")
@@ -272,42 +285,52 @@ def list_space_balances(session: Session) -> tuple[int, list[dict]]:
     return spaces_total_c, space_items
 
 
-def calculate_base_cash_balance_c(session: Session) -> int:
-    all_txs = session.exec(select(Transaction)).all()
+def calculate_base_cash_balance_c(session: Session, before: datetime | None = None) -> int:
+    tx_stmt = select(Transaction)
+    if before is not None:
+        tx_stmt = tx_stmt.where(Transaction.happened_at < before)
+    all_txs = session.exec(tx_stmt).all()
     all_income_c = sum(tx.amount_cents for tx in all_txs if tx.type == "income")
     all_expense_c = sum(tx.amount_cents for tx in all_txs if tx.type == "expense")
 
-    all_transfers = session.exec(
+    transfer_stmt = (
         select(SpaceTransfer.direction, func.sum(SpaceTransfer.amount_cents))
         .group_by(SpaceTransfer.direction)
-    ).all()
+    )
+    if before is not None:
+        transfer_stmt = transfer_stmt.where(SpaceTransfer.happened_at < before)
+    all_transfers = session.exec(transfer_stmt).all()
     all_to_space_c = sum(int(s or 0) for d, s in all_transfers if d == "to_space")
     all_from_space_c = sum(int(s or 0) for d, s in all_transfers if d == "from_space")
 
     return (all_income_c - all_expense_c) - all_to_space_c + all_from_space_c
 
 
-def build_investment_state(session: Session) -> dict:
+def build_investment_state(session: Session, before: datetime | None = None) -> dict:
     accounts = list_investment_accounts(session)
     assets = session.exec(select(InvestmentAsset).order_by(InvestmentAsset.name)).all()
     assets_map = {asset.id: asset for asset in assets}
     accounts_map = {account.id: account for account in accounts}
 
-    price_rows = session.exec(
+    price_stmt = (
         select(InvestmentPriceSnapshot)
         .order_by(InvestmentPriceSnapshot.asset_id, InvestmentPriceSnapshot.priced_at.desc(), InvestmentPriceSnapshot.id.desc())
-    ).all()
+    )
+    if before is not None:
+        price_stmt = price_stmt.where(InvestmentPriceSnapshot.priced_at < before)
+    price_rows = session.exec(price_stmt).all()
     latest_prices: dict[int, InvestmentPriceSnapshot] = {}
     for row in price_rows:
         if row.asset_id not in latest_prices:
             latest_prices[row.asset_id] = row
 
-    trades = session.exec(
-        select(InvestmentTrade).order_by(InvestmentTrade.happened_at, InvestmentTrade.id)
-    ).all()
-    cash_events = session.exec(
-        select(InvestmentCashEvent).order_by(InvestmentCashEvent.happened_at, InvestmentCashEvent.id)
-    ).all()
+    trade_stmt = select(InvestmentTrade).order_by(InvestmentTrade.happened_at, InvestmentTrade.id)
+    event_stmt = select(InvestmentCashEvent).order_by(InvestmentCashEvent.happened_at, InvestmentCashEvent.id)
+    if before is not None:
+        trade_stmt = trade_stmt.where(InvestmentTrade.happened_at < before)
+        event_stmt = event_stmt.where(InvestmentCashEvent.happened_at < before)
+    trades = session.exec(trade_stmt).all()
+    cash_events = session.exec(event_stmt).all()
 
     holdings_state: dict[int, dict] = defaultdict(lambda: {
         "quantity_micros": 0,
@@ -2275,9 +2298,17 @@ def admin_create_investment_price(payload: InvestmentPriceCreate, session: Sessi
 
 @app.get("/admin/summary", dependencies=[Depends(require_admin)])
 def admin_summary(start: datetime | None = None, end: datetime | None = None,
+                  year: int | None = None, month: int | None = None,
                   session: Session = Depends(get_session)):
     now = datetime.utcnow()
-    if not start or not end:
+    before = None
+    if year is not None or month is not None:
+        if start is not None or end is not None:
+            raise HTTPException(status_code=400, detail="Use either year/month or start/end")
+        start, end = resolve_dashboard_period(year, month)
+        if start < month_bounds(now)[0]:
+            before = end
+    elif not start or not end:
         start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         end = (start + timedelta(days=32)).replace(day=1)
 
@@ -2314,9 +2345,9 @@ def admin_summary(start: datetime | None = None, end: datetime | None = None,
     to_spaces_total_c = sum(t.amount_cents for t in transfers if t.direction == "to_space")
     from_spaces_total_c = sum(t.amount_cents for t in transfers if t.direction == "from_space")
 
-    base_cash_balance_c = calculate_base_cash_balance_c(session)
-    spaces_total_c, space_items = list_space_balances(session)
-    investment_state = build_investment_state(session)
+    base_cash_balance_c = calculate_base_cash_balance_c(session, before=before)
+    spaces_total_c, space_items = list_space_balances(session, before=before)
+    investment_state = build_investment_state(session, before=before)
     investment_summary = investment_state["summary"]
     investments_market_value_c = amount_to_cents(investment_summary["investments_market_value"])
     cash_balance_c = base_cash_balance_c + amount_to_cents(investment_summary["investment_cash_delta"])
@@ -2347,13 +2378,15 @@ def admin_summary(start: datetime | None = None, end: datetime | None = None,
 
 
 @app.get("/admin/analytics/monthly-trends", dependencies=[Depends(require_admin)])
-def admin_monthly_trends(months: int = 12, session: Session = Depends(get_session)):
-    now = datetime.utcnow()
+def admin_monthly_trends(months: int = Query(default=12, ge=1, le=60),
+                        year: int | None = None, month: int | None = None,
+                        session: Session = Depends(get_session)):
+    now, _ = resolve_dashboard_period(year, month)
     cats = {c.id: c for c in session.exec(select(Category)).all()}
     users_map = {u.telegram_id: u.name for u in session.exec(select(User)).all()}
 
     result = []
-    for i in range(months - 1, -1, -1):
+    for i in range(min(months, (now.year - 1) * 12 + now.month) - 1, -1, -1):
         # Calculate month offset
         y = now.year
         m = now.month - i
@@ -2429,12 +2462,15 @@ def admin_monthly_trends(months: int = 12, session: Session = Depends(get_sessio
 )
 def admin_average_spending_by_category(
     months: int = Query(default=12, ge=1, le=60),
+    year: int | None = None,
+    month: int | None = None,
     session: Session = Depends(get_session),
 ):
     """Return average monthly expenses by category for completed calendar months."""
     now = datetime.utcnow()
-    period_end = datetime(now.year, now.month, 1)
-    start_month_index = period_end.year * 12 + period_end.month - 1 - months
+    _, selected_end = resolve_dashboard_period(year, month)
+    period_end = min(selected_end, datetime(now.year, now.month, 1))
+    start_month_index = max(12, period_end.year * 12 + period_end.month - 1 - months)
     requested_period_start = datetime(
         start_month_index // 12,
         start_month_index % 12 + 1,

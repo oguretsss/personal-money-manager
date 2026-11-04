@@ -40,7 +40,10 @@ from models import (
     IncomeSortTemplateItem,
     InvestmentAccount,
     InvestmentAsset,
+    InvestmentCashEvent,
+    InvestmentPriceSnapshot,
     InvestmentTrade,
+    Space,
     SpaceTransfer,
     Subscription,
     SubscriptionPayment,
@@ -105,6 +108,135 @@ class ApiAuthenticationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.headers["www-authenticate"], "Bearer")
+
+    def seed_dashboard_history(self):
+        self.add_user(1001)
+        with Session(engine) as session:
+            income = Category(name="Salary history", type="income")
+            expense = Category(name="Food history", type="expense")
+            space = Space(name="Savings history", created_at=datetime(2020, 11, 1))
+            future_space = Space(name="Future space", created_at=datetime(2021, 1, 1))
+            account = InvestmentAccount(name="History account")
+            asset = InvestmentAsset(isin="HISTORY123", name="History ETF", asset_type="etf")
+            session.add_all([income, expense, space, future_space, account, asset])
+            session.commit()
+            for category, amount, date in [
+                (income, 100000, datetime(2020, 11, 1)),
+                (expense, 4000, datetime(2020, 11, 15)),
+                (expense, 10000, datetime(2020, 12, 31, 23, 59, 59)),
+                (income, 900000, datetime(2021, 1, 1)),
+                (expense, 99900, datetime(2021, 1, 1)),
+            ]:
+                session.add(Transaction(type=category.type, category_id=category.id,
+                                        amount_cents=amount, happened_at=date,
+                                        created_by_telegram_id=1001))
+            for direction, amount, date in [
+                ("to_space", 20000, datetime(2020, 11, 15)),
+                ("to_space", 5000, datetime(2020, 12, 1)),
+                ("from_space", 2000, datetime(2020, 12, 31, 23, 59, 59)),
+                ("to_space", 99900, datetime(2021, 1, 1)),
+            ]:
+                session.add(SpaceTransfer(space_id=space.id, direction=direction,
+                                          amount_cents=amount, happened_at=date,
+                                          created_by_telegram_id=1001))
+            for side, quantity, price, fee, date in [
+                ("buy", 2000000, 10000, 200, datetime(2020, 11, 10)),
+                ("sell", 1000000, 12000, 100, datetime(2020, 12, 10)),
+                ("buy", 1000000, 20000, 0, datetime(2021, 1, 1)),
+            ]:
+                session.add(InvestmentTrade(account_id=account.id, asset_id=asset.id,
+                                            side=side, quantity_micros=quantity,
+                                            unit_price_cents=price, fees_cents=fee,
+                                            happened_at=date, created_by_telegram_id=1001))
+            for amount, date in [(500, datetime(2020, 12, 15)), (99900, datetime(2021, 1, 1))]:
+                session.add(InvestmentCashEvent(account_id=account.id, asset_id=asset.id,
+                                                event_type="dividend", amount_cents=amount,
+                                                happened_at=date, created_by_telegram_id=1001))
+            for price, date in [(15000, datetime(2020, 12, 31, 23, 59, 59)), (99900, datetime(2021, 1, 1))]:
+                session.add(InvestmentPriceSnapshot(asset_id=asset.id, price_cents=price, priced_at=date))
+            session.add(CategoryLimit(category_id=expense.id, amount_cents=25000))
+            session.commit()
+
+    def test_dashboard_historical_summary_uses_month_end_balances_and_prices(self):
+        self.seed_dashboard_history()
+        response = self.client.get("/admin/summary", params={"year": 2020, "month": 12},
+                                   headers=self.bearer(ADMIN_TOKEN))
+        self.assertEqual(response.status_code, 200, response.text)
+        summary = response.json()
+        for field, expected in {
+            "income_total": 0, "expense_total": 100,
+            "to_spaces_total": 50, "from_spaces_total": 20,
+            "cash_balance": 552, "spaces_total": 230,
+            "investments_total": 150, "investments_cost_basis": 101,
+            "investments_unrealized_pnl": 49, "investment_income_total": 5,
+            "total_assets": 932,
+        }.items():
+            with self.subTest(field=field):
+                self.assertEqual(summary[field], expected)
+        self.assertEqual(summary["spaces"], [{"space": "Savings history", "balance": 230}])
+        self.assertEqual(summary["investment_holdings"][0]["quantity"], 1)
+        self.assertEqual(summary["by_category"], [{"category": "Food history", "type": "expense", "total": 100}])
+
+        # Without a price known at that time, fall back to the historical cost basis.
+        with Session(engine) as session:
+            for snapshot in session.exec(select(InvestmentPriceSnapshot).where(
+                InvestmentPriceSnapshot.priced_at < datetime(2021, 1, 1)
+            )).all():
+                session.delete(snapshot)
+            session.commit()
+        fallback = self.client.get("/admin/summary", params={"year": 2020, "month": 12},
+                                   headers=self.bearer(ADMIN_TOKEN)).json()
+        self.assertEqual(fallback["investments_total"], 101)
+        self.assertFalse(fallback["investment_holdings"][0]["has_price"])
+
+    def test_dashboard_analytics_and_limits_stop_at_selected_month(self):
+        self.seed_dashboard_history()
+        params = {"year": 2020, "month": 12, "months": 2}
+        trends = self.client.get("/admin/analytics/monthly-trends", params=params,
+                                 headers=self.bearer(ADMIN_TOKEN)).json()
+        self.assertEqual([(row["year"], row["month"]) for row in trends], [(2020, 11), (2020, 12)])
+        self.assertEqual(trends[0]["income_total"], 1000)
+        self.assertEqual(trends[-1]["expense_total"], 100)
+        average = self.client.get("/admin/analytics/average-spending-by-category", params=params,
+                                  headers=self.bearer(ADMIN_TOKEN)).json()
+        self.assertEqual(average["period_end_exclusive"], "2021-01-01")
+        self.assertEqual(average["items"], [{"category": "Food history", "average": 70}])
+        limits = self.client.get("/admin/limits", params=params, headers=self.bearer(ADMIN_TOKEN)).json()
+        self.assertEqual(limits[0]["spent"], 100)
+        self.assertEqual(limits[0]["period"], "2020-12")
+
+    def test_dashboard_current_month_keeps_current_balances(self):
+        self.seed_dashboard_history()
+        now = datetime.utcnow()
+        default = self.client.get("/admin/summary", headers=self.bearer(ADMIN_TOKEN)).json()
+        selected = self.client.get("/admin/summary", params={"year": now.year, "month": now.month},
+                                   headers=self.bearer(ADMIN_TOKEN)).json()
+        self.assertEqual(default, selected)
+        self.assertGreater(selected["investments_total"], 150)
+
+    def test_dashboard_before_first_activity_has_zero_balances(self):
+        self.seed_dashboard_history()
+        params = {"year": 2020, "month": 10}
+        summary = self.client.get("/admin/summary", params=params,
+                                  headers=self.bearer(ADMIN_TOKEN)).json()
+        for field in ["cash_balance", "spaces_total", "investments_total", "total_assets", "expense_total"]:
+            self.assertEqual(summary[field], 0)
+        self.assertEqual(summary["investment_holdings"], [])
+        self.assertEqual(summary["spaces"], [])
+        average = self.client.get("/admin/analytics/average-spending-by-category", params=params,
+                                  headers=self.bearer(ADMIN_TOKEN)).json()
+        self.assertEqual(average["months"], 0)
+        self.assertEqual(average["items"], [])
+
+    def test_dashboard_period_validation(self):
+        for endpoint in ["/admin/summary", "/admin/analytics/monthly-trends",
+                         "/admin/analytics/average-spending-by-category"]:
+            for params in [{"year": 2020}, {"month": 12}, {"year": 2020, "month": 13},
+                           {"year": 9999, "month": 1}, {"year": 9999, "month": 12},
+                           {"year": 1, "month": 1}]:
+                with self.subTest(endpoint=endpoint, params=params):
+                    response = self.client.get(endpoint, params=params, headers=self.bearer(ADMIN_TOKEN))
+                    self.assertEqual(response.status_code, 400, response.text)
 
     def seed_transaction_ledger(self):
         with Session(engine) as session:
