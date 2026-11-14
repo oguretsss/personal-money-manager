@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 class TransactionCreate(BaseModel):
     type: str  # "income" or "expense"
@@ -51,6 +51,11 @@ class TransactionUpdate(BaseModel):
     category_name: str | None = None
     happened_at: datetime | None = None
     note: str | None = None
+
+
+class PersonalTransactionUpdate(TransactionUpdate):
+    model_config = ConfigDict(extra="forbid")
+
 
 class AdminTransactionCreate(BaseModel):
     type: str

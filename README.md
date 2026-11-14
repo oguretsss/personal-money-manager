@@ -197,8 +197,9 @@ For a personal token, use `principal_type: "user"` and provide an active
 `telegram_id`. Requests authenticated with that token do not need a
 `telegram_id` query parameter and cannot impersonate another user.
 
-The Docker configuration binds API port 8001 to `127.0.0.1`. To publish the API,
-keep this binding and expose it through the included HTTPS reverse proxy:
+Docker publishes API port 8001 on all IPv4 interfaces. On the local network,
+use `http://<host-ip>:8001`. For access over the Internet, use the included
+HTTPS reverse proxy and block Internet traffic to port 8001 at the firewall:
 
 1. Point the DNS `A`/`AAAA` record for your API domain to the server.
 2. Add `API_DOMAIN=api.example.com` to `.env`.
@@ -209,20 +210,58 @@ keep this binding and expose it through the included HTTPS reverse proxy:
    docker compose -f docker-compose.yml -f docker-compose.public-api.yml up -d --build
    ```
 
-Caddy obtains and renews the TLS certificate automatically. Port 8001 remains
-available only on localhost and inside the Docker network.
+Caddy obtains and renews the TLS certificate automatically.
 
 When upgrading an existing installation, replace `API_ADMIN_TOKEN` with a new
 random value of at least 32 characters and restart `api` and `web` together.
 If the Telegram bot is enabled, also add a different `API_BOT_TOKEN` and restart
 `bot` using the `telegram` profile.
 
+## MoneyManage Codex Skill
+
+The [MoneyManage skill](.agents/skills/moneymanage/SKILL.md) calls the API
+directly. It supports finding, adding, editing, and deleting transactions, and
+summarizing family spending by period and category.
+
+1. Deploy the updated API. A Codex Cloud environment needs the HTTPS origin
+   described above. Local Codex on the API host can use `http://127.0.0.1:8001`.
+2. Create a separate token through `POST /admin/api-tokens` for each active
+   MoneyManage user. Supply that user's existing `telegram_id` in the payload:
+
+   ```json
+   {
+     "name": "MoneyManage Codex",
+     "principal_type": "user",
+     "telegram_id": 123456789,
+     "scopes": ["family:read", "transactions:write", "transactions:delete"]
+   }
+   ```
+
+   Use just `family:read` for an analysis-only connection. Users with write
+   or delete scopes can change their own entries. Users with the MoneyManage
+   admin role can also change other family members' entries.
+3. For local Codex, set `MONEYMANAGE_API_URL` and `MONEYMANAGE_API_TOKEN`
+   in the environment of the Codex process. For Codex Cloud, each person
+   connects the repository branch that contains the skill to their own
+   environment. Set `MONEYMANAGE_API_URL` to the HTTPS origin in
+   **Environment variables**, add its hostname under **Additional allowed
+   domains**, and configure the environment to request
+   `MONEYMANAGE_API_TOKEN` as a personal **Network secret**. Save the matching
+   token in **Personal vault**, scoped to that environment, and publish the
+   environment. Keep the token out of Git and chat.
+   [Codex Cloud setup guide](https://learn.chatgpt.com/docs/environments/cloud-environments)
+4. In a Codex chat for this repository, try
+   `$moneymanage Покажи расходы за этот месяц по категориям`.
+   On iPhone, open **Codex → Cloud** and choose the published environment.
+
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/health` | Health check |
+| `GET` | `/transactions` | Search the family ledger by ID, type, category, note, and date range |
 | `POST` | `/transactions` | Create transaction |
+| `PATCH` | `/transactions/{id}` | Edit amount, category, date, or note |
 | `DELETE` | `/transactions/{id}` | Delete transaction |
 | `GET` | `/summary` | Financial summary |
 | `GET` | `/categories` | List categories |

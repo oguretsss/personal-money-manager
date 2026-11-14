@@ -1,0 +1,4 @@
+interface:
+  display_name: "MoneyManage"
+  short_description: "Manage transactions and analyze family spending"
+  default_prompt: "Use $moneymanage to show my spending by category for this month."

@@ -25,6 +25,7 @@ from sqlmodel import Session, SQLModel, select
 
 from auth import (
     SCOPE_FAMILY_READ,
+    SCOPE_TRANSACTIONS_DELETE,
     SCOPE_TRANSACTIONS_WRITE,
     create_stored_token,
     get_auth_context,
@@ -438,6 +439,80 @@ class ApiAuthenticationTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+    def test_family_transaction_search_and_mutations_with_personal_tokens(self):
+        scopes = {SCOPE_FAMILY_READ, SCOPE_TRANSACTIONS_WRITE, SCOPE_TRANSACTIONS_DELETE}
+        self.add_user(1101)
+        self.add_user(1102)
+        self.add_user(1103, role="admin")
+        credentials = {}
+        for user_id, user_scopes in ((1101, scopes), (1102, scopes), (1103, {SCOPE_TRANSACTIONS_WRITE})):
+            _, token = self.create_token(
+                name="MoneyManage skill",
+                principal_type="user",
+                telegram_id=user_id,
+                scopes=user_scopes,
+            )
+            credentials[user_id] = self.bearer(token)
+
+        def add(user_id, note, date):
+            response = self.client.post("/transactions", headers=credentials[user_id], json={
+                "type": "expense",
+                "amount": 12.34,
+                "category_name": "Groceries",
+                "note": note,
+                "happened_at": date,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()["id"]
+
+        own_id = add(1101, "Market 10% off", "2026-11-14T23:59:59")
+        other_id = add(1102, "Market no discount", "2026-11-14T23:59:59")
+        add(1101, "Market then", "2026-11-15T00:00:00")
+        path = f"/transactions/{own_id}"
+        self.assertEqual(self.client.get("/transactions").status_code, 401)
+        self.assertEqual(self.client.patch(path, json={"amount": 14}).status_code, 401)
+
+        period = {"type": "expense", "category": "Groceries", "start": "2026-11-14", "end": "2026-11-15"}
+        page = self.client.get("/transactions", headers=credentials[1101], params={**period, "per_page": 1}).json()
+        self.assertTrue(page["has_more"])
+        self.assertEqual(page["items"][0]["id"], other_id)
+        self.assertFalse(page["items"][0]["is_mine"])
+
+        def search(**params):
+            response = self.client.get("/transactions", headers=credentials[1101], params=params)
+            self.assertEqual(response.status_code, 200, response.text)
+            return response.json()["items"]
+
+        self.assertEqual([row["id"] for row in search(**period, q="market 10%")], [own_id])
+        self.assertEqual(len(search(**period, mine=True)), 1)
+        self.assertEqual(search(id=own_id)[0]["created_by"], "User 1101")
+        self.assertEqual(self.client.patch(path, headers=credentials[1102], json={"amount": 25}).status_code, 403)
+        self.assertEqual(self.client.delete(path, headers=credentials[1102]).status_code, 403)
+        self.assertEqual(self.client.patch(
+            path, headers=credentials[1101], json={"created_by_telegram_id": 1102},
+        ).status_code, 422)
+        self.assertEqual(self.client.patch(
+            path, headers=credentials[1101], params={"telegram_id": 1102}, json={"amount": 25},
+        ).status_code, 403)
+        self.assertEqual(self.client.patch(
+            path, headers=credentials[1101], json={"amount": 0.001, "category_name": "New"},
+        ).status_code, 400)
+        with Session(engine) as session:
+            self.assertIsNone(session.exec(select(Category).where(Category.name == "New")).first())
+
+        response = self.client.patch(path, headers=credentials[1101], json={
+            "amount": 15.75, "category_name": "Food", "note": "",
+        })
+        self.assertEqual(response.status_code, 200)
+        item = search(id=own_id)[0]
+        self.assertEqual((item["amount"], item["category"], item["note"]), (15.75, "Food", ""))
+        self.assertEqual(self.client.patch(
+            path, headers=credentials[1103], json={"note": "corrected"},
+        ).status_code, 200)
+        self.assertEqual(self.client.delete(path, headers=credentials[1103]).status_code, 403)
+        self.assertEqual(self.client.delete(path, headers=credentials[1101]).status_code, 200)
+        self.assertEqual(search(id=own_id), [])
 
     def test_revoked_token_is_rejected(self):
         self.add_user(1007)
@@ -870,6 +945,18 @@ class ApiAuthenticationTests(unittest.TestCase):
         self.assertEqual(edit_response.status_code, 409)
         self.assertEqual(delete_response.status_code, 409)
 
+        _, token = self.create_token(
+            name="Income owner",
+            principal_type="user",
+            telegram_id=1012,
+            scopes={SCOPE_TRANSACTIONS_WRITE, SCOPE_TRANSACTIONS_DELETE},
+        )
+        personal_path = f"/transactions/{income_id}"
+        self.assertEqual(self.client.patch(
+            personal_path, headers=self.bearer(token), json={"amount": 999},
+        ).status_code, 409)
+        self.assertEqual(self.client.delete(personal_path, headers=self.bearer(token)).status_code, 409)
+
         with Session(engine) as session:
             self.assertEqual(len(session.exec(select(SpaceTransfer)).all()), 2)
             self.assertEqual(len(session.exec(select(IncomeSort)).all()), 1)
@@ -1021,9 +1108,14 @@ class ApiAuthenticationTests(unittest.TestCase):
         self.assertEqual(after_payment["items"][0]["status"], "paid")
         self.assertEqual(after_payment["summary"]["paid_amount"], 12.99)
 
+        _, token = self.create_token(
+            name="Subscription owner",
+            principal_type="user",
+            telegram_id=1015,
+            scopes={SCOPE_TRANSACTIONS_DELETE},
+        )
         delete_transaction_response = self.client.delete(
-            f"/admin/transactions/{payment_response.json()['transaction_id']}",
-            headers=self.bearer(ADMIN_TOKEN),
+            f"/transactions/{payment_response.json()['transaction_id']}", headers=self.bearer(token),
         )
         self.assertEqual(delete_transaction_response.status_code, 200)
         after_delete = self.client.get(

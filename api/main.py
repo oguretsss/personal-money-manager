@@ -1,12 +1,15 @@
 from calendar import monthrange
 from collections import defaultdict
 from fastapi import FastAPI, Depends, HTTPException, Query
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import case, literal, union_all
 from sqlalchemy import select as sa_select
 from sqlmodel import Session, select, func
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
+from math import isfinite
 import os
+from typing import Literal
 
 from db import init_db, get_session
 from models import (
@@ -31,6 +34,7 @@ from models import (
 from schemas import (
     TransactionCreate, SummaryResponse, SummaryItem, SpaceBalanceItem,
     SpaceTransferCreate, TransactionUpdate, AdminTransactionCreate,
+    PersonalTransactionUpdate,
     SubscriptionCreate, SubscriptionUpdate, SubscriptionPay,
     CategoryUpdate, CategoryLimitUpdate, SpaceUpdate,
     IncomeSortTemplateUpdate, IncomeSortApply,
@@ -81,21 +85,29 @@ def on_startup():
     init_db()
 
 def get_or_create_category(session: Session, name: str, tx_type: str) -> Category:
+    if not name:
+        raise HTTPException(status_code=400, detail="Category name is required")
     cat = session.exec(select(Category).where(Category.name == name)).first()
-    if cat:
-        # Если категория существует, но тип другой — это уже “конфликт”
-        if cat.type != tx_type:
-            raise HTTPException(status_code=400, detail="Category type mismatch")
-        return cat
-    cat = Category(name=name, type=tx_type)
-    session.add(cat)
-    session.commit()
-    session.refresh(cat)
+    if cat is None:
+        # Keep category creation in the same transaction as the ledger change.
+        session.execute(
+            insert(Category).values(name=name, type=tx_type)
+            .on_conflict_do_nothing(index_elements=[Category.name])
+        )
+        cat = session.exec(select(Category).where(Category.name == name)).one()
+    if cat.type != tx_type:
+        raise HTTPException(status_code=400, detail="Category type mismatch")
     return cat
 
 
 def amount_to_cents(value: float) -> int:
     return int(round(value * 100))
+
+
+def transaction_amount_to_cents(value: float) -> int:
+    if not isfinite(value * 100) or not 0 < (cents := amount_to_cents(value)) < 2**63:
+        raise HTTPException(status_code=400, detail="Transaction amount is out of range")
+    return cents
 
 
 def month_bounds(value: datetime) -> tuple[datetime, datetime]:
@@ -862,10 +874,9 @@ def create_transaction(
     if tx_type not in ("income", "expense"):
         raise HTTPException(status_code=400, detail="Invalid type")
 
-    cat = get_or_create_category(session, payload.category_name.strip(), tx_type)
-
     happened_at = payload.happened_at or datetime.utcnow()
-    amount_cents = int(round(payload.amount * 100))
+    amount_cents = transaction_amount_to_cents(payload.amount)
+    cat = get_or_create_category(session, payload.category_name.strip(), tx_type)
 
     tx = Transaction(
         type=tx_type,
@@ -876,14 +887,51 @@ def create_transaction(
         created_by_telegram_id=user.telegram_id,
     )
     session.add(tx)
-    session.commit()
-    session.refresh(tx)
+    session.flush()
     limit_status = (
         get_category_limit_progress(session, tx.category_id, tx.happened_at)
         if tx.type == "expense"
         else None
     )
-    return {"id": tx.id, "ok": True, "limit_status": limit_status}
+    result = {"id": tx.id, "ok": True, "limit_status": limit_status}
+    session.commit()
+    return result
+
+
+def begin_transaction_mutation(session: Session) -> None:
+    # Prevent another write between checking linked records and updating the ledger.
+    session.connection().exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def get_transaction_for_mutation(
+    session: Session,
+    tx_id: int,
+    *,
+    user: User | None = None,
+) -> Transaction:
+    tx = session.get(Transaction, tx_id)
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if user and user.role != "admin" and tx.created_by_telegram_id != user.telegram_id:
+        raise HTTPException(status_code=403, detail="You can only change your own transactions")
+    return tx
+
+
+@app.patch("/transactions/{tx_id}")
+def update_transaction(
+    tx_id: int,
+    payload: PersonalTransactionUpdate,
+    telegram_id: int | None = None,
+    auth: AuthContext = Depends(require_scopes(SCOPE_TRANSACTIONS_WRITE)),
+    session: Session = Depends(get_session),
+):
+    user = resolve_request_user(auth, telegram_id, session, required=True)
+    if not payload.model_dump(exclude_none=True):
+        raise HTTPException(status_code=400, detail="Supply at least one field to update")
+    begin_transaction_mutation(session)
+    tx = get_transaction_for_mutation(session, tx_id, user=user)
+    return apply_transaction_update(session, tx, payload)
+
 
 @app.delete("/transactions/{tx_id}")
 def delete_transaction(
@@ -893,20 +941,74 @@ def delete_transaction(
     session: Session = Depends(get_session),
 ):
     user = resolve_request_user(auth, telegram_id, session, required=True)
-    tx = session.get(Transaction, tx_id)
-    if not tx:
-        raise HTTPException(status_code=404, detail="Not found")
-    # простое правило: удалять может админ или тот, кто создал
-    if (
-        not auth.has_scope(SCOPE_ADMIN)
-        and user.role != "admin"
-        and tx.created_by_telegram_id != user.telegram_id
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
+    begin_transaction_mutation(session)
+    tx = get_transaction_for_mutation(session, tx_id, user=None if auth.has_scope(SCOPE_ADMIN) else user)
+    return remove_transaction(session, tx)
 
-    session.delete(tx)
-    session.commit()
-    return {"ok": True}
+
+@app.get("/transactions")
+def list_transactions(
+    id: int | None = Query(default=None, gt=0, lt=2**63),
+    type: Literal["income", "expense"] | None = None,
+    category: str | None = None,
+    q: str | None = Query(default=None, min_length=1, max_length=200),
+    start: date | None = None,
+    end: date | None = None,
+    mine: bool = False,
+    page: int = Query(default=1, ge=1, le=1_000_000),
+    per_page: int = Query(default=25, ge=1, le=100),
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
+    session: Session = Depends(get_session),
+):
+    """Search the household ledger. Date bounds use an exclusive end."""
+    user = resolve_request_user(auth, None, session, required=mine)
+    if start and end and start >= end:
+        raise HTTPException(status_code=400, detail="End date must be after start date")
+
+    filters = []
+    if id is not None:
+        filters.append(Transaction.id == id)
+    if type:
+        filters.append(Transaction.type == type)
+    if category:
+        filters.append(Category.name == category)
+    if q:
+        filters.append(Transaction.note.icontains(q, autoescape=True))
+    if start:
+        filters.append(Transaction.happened_at >= datetime.combine(start, time.min))
+    if end:
+        filters.append(Transaction.happened_at < datetime.combine(end, time.min))
+    if mine:
+        filters.append(Transaction.created_by_telegram_id == user.telegram_id)
+
+    stmt = (
+        select(Transaction, Category.name, User.name)
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .outerjoin(User, Transaction.created_by_telegram_id == User.telegram_id)
+        .where(*filters)
+        .order_by(Transaction.happened_at.desc(), Transaction.id.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page + 1)
+    )
+    rows = session.exec(stmt).all()
+    return {
+        "page": page,
+        "has_more": len(rows) > per_page,
+        "items": [
+            {
+                "id": tx.id,
+                "type": tx.type,
+                "amount": tx.amount_cents / 100,
+                "category": category_name,
+                "happened_at": tx.happened_at.isoformat(),
+                "note": tx.note,
+                "created_by": creator_name,
+                "is_mine": user is not None and tx.created_by_telegram_id == user.telegram_id,
+            }
+            for tx, category_name, creator_name in rows[:per_page]
+        ],
+    }
+
 
 @app.get("/summary", response_model=SummaryResponse)
 def summary(
@@ -1318,17 +1420,20 @@ def admin_create_transaction(payload: AdminTransactionCreate, session: Session =
 
 @app.put("/admin/transactions/{tx_id}", dependencies=[Depends(require_admin)])
 def admin_update_transaction(tx_id: int, payload: TransactionUpdate, session: Session = Depends(get_session)):
-    tx = session.get(Transaction, tx_id)
-    if not tx:
-        raise HTTPException(status_code=404, detail="Not found")
-    if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx_id)).first():
+    begin_transaction_mutation(session)
+    tx = get_transaction_for_mutation(session, tx_id)
+    return apply_transaction_update(session, tx, payload)
+
+
+def apply_transaction_update(session: Session, tx: Transaction, payload: TransactionUpdate):
+    if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx.id)).first():
         raise HTTPException(status_code=409, detail="Undo the income sort before editing this transaction")
 
-    if payload.amount is not None:
-        tx.amount_cents = int(round(payload.amount * 100))
     if payload.category_name is not None:
         cat = get_or_create_category(session, payload.category_name.strip(), tx.type)
         tx.category_id = cat.id
+    if payload.amount is not None:
+        tx.amount_cents = transaction_amount_to_cents(payload.amount)
     if payload.happened_at is not None:
         tx.happened_at = payload.happened_at
     if payload.note is not None:
@@ -1341,13 +1446,16 @@ def admin_update_transaction(tx_id: int, payload: TransactionUpdate, session: Se
 
 @app.delete("/admin/transactions/{tx_id}", dependencies=[Depends(require_admin)])
 def admin_delete_transaction(tx_id: int, session: Session = Depends(get_session)):
-    tx = session.get(Transaction, tx_id)
-    if not tx:
-        raise HTTPException(status_code=404, detail="Not found")
-    if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx_id)).first():
+    begin_transaction_mutation(session)
+    tx = get_transaction_for_mutation(session, tx_id)
+    return remove_transaction(session, tx)
+
+
+def remove_transaction(session: Session, tx: Transaction):
+    if session.exec(select(IncomeSort).where(IncomeSort.transaction_id == tx.id)).first():
         raise HTTPException(status_code=409, detail="Undo the income sort before deleting this transaction")
     subscription_payment = session.exec(
-        select(SubscriptionPayment).where(SubscriptionPayment.transaction_id == tx_id)
+        select(SubscriptionPayment).where(SubscriptionPayment.transaction_id == tx.id)
     ).first()
     if subscription_payment:
         session.delete(subscription_payment)
@@ -1749,6 +1857,7 @@ def admin_sort_income_transaction(
     payload: IncomeSortApply,
     session: Session = Depends(get_session),
 ):
+    begin_transaction_mutation(session)
     transaction = session.get(Transaction, tx_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
