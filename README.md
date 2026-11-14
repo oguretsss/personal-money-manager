@@ -172,9 +172,11 @@ Authorization: Bearer <token>
 Available scopes:
 
 - `family:read`
+- `categories:write` (personal tokens)
 - `transactions:write`
 - `transactions:delete`
 - `spaces:write`
+- `spaces:manage` (personal tokens)
 - `reports:send`
 - `act_as_telegram_user` (service tokens only)
 - `admin` (service tokens only)
@@ -220,8 +222,10 @@ If the Telegram bot is enabled, also add a different `API_BOT_TOKEN` and restart
 ## MoneyManage Codex Skill
 
 The [MoneyManage skill](.agents/skills/moneymanage/SKILL.md) calls the API
-directly. It supports finding, adding, editing, and deleting transactions, and
-summarizing family spending by period and category.
+directly. It summarizes spending for the household or by family member,
+manages transactions, shared categories and spending limits, and records
+movements into and out of shared savings Spaces. It also shows recurring
+expenses and their recorded payment status.
 
 1. Deploy the updated API. A Codex Cloud environment needs the HTTPS origin
    described above. Local Codex on the API host can use `http://127.0.0.1:8001`.
@@ -233,13 +237,27 @@ summarizing family spending by period and category.
      "name": "MoneyManage Codex",
      "principal_type": "user",
      "telegram_id": 123456789,
-     "scopes": ["family:read", "transactions:write", "transactions:delete"]
+     "scopes": [
+       "family:read",
+       "transactions:write",
+       "transactions:delete",
+       "categories:write",
+       "spaces:write",
+       "spaces:manage"
+     ]
    }
    ```
 
-   Use just `family:read` for an analysis-only connection. Users with write
-   or delete scopes can change their own entries. Users with the MoneyManage
-   admin role can also change other family members' entries.
+   Use just `family:read` for analysis. The corresponding write and delete
+   scopes allow users to update their own transactions. Users with the
+   MoneyManage admin role can also change other members' transactions with
+   those scopes. New entries are attributed to the personal token's user.
+   `categories:write` changes shared categories and limits. `spaces:write`
+   records transfers, and `spaces:manage` manages shared Spaces. The shared
+   read-only service token remains usable for household reports. The original
+   transaction API can create a missing category when saving an entry. The
+   Space transfer API can create a missing Space when `existing_only` is
+   omitted.
 3. For local Codex, set `MONEYMANAGE_API_URL` and `MONEYMANAGE_API_TOKEN`
    in the environment of the Codex process. For Codex Cloud, each person
    connects the repository branch that contains the skill to their own
@@ -251,7 +269,8 @@ summarizing family spending by period and category.
    environment. Keep the token out of Git and chat.
    [Codex Cloud setup guide](https://learn.chatgpt.com/docs/environments/cloud-environments)
 4. In a Codex chat for this repository, try
-   `$moneymanage Покажи расходы за этот месяц по категориям`.
+   `$moneymanage Покажи расходы семьи за этот месяц по людям и категориям`.
+   Run the Skill's `whoami` command to check the connected account and scopes.
    On iPhone, open **Codex → Cloud** and choose the published environment.
 
 ## API Endpoints
@@ -264,9 +283,17 @@ summarizing family spending by period and category.
 | `PATCH` | `/transactions/{id}` | Edit amount, category, date, or note |
 | `DELETE` | `/transactions/{id}` | Delete transaction |
 | `GET` | `/summary` | Financial summary |
+| `GET` | `/spending` | Spending in a date range by member and category |
+| `GET` | `/family/members`, `/family/me` | Family member lookup and connected account |
 | `GET` | `/categories` | List categories |
+| `GET` | `/categories/details`, `/limits` | Category IDs and usage, monthly spending limits |
+| `POST` and `PUT/DELETE` | `/categories` and `/categories/{id}` | Create, rename, and delete shared categories |
+| `PUT/DELETE` | `/limits/{category_id}` | Set or remove a monthly limit |
 | `GET` | `/spaces` | List savings spaces |
+| `POST` and `PUT/DELETE` | `/spaces` and `/spaces/{id}` | Create, rename, and delete shared Spaces |
+| `GET` | `/spaces/transfers` | Transfer history |
 | `POST` | `/spaces/transfer` | Transfer to/from space |
+| `GET` | `/subscriptions` | Monthly subscription status |
 | `POST` | `/admin/users` | Manage users (admin) |
 | `GET/POST` | `/admin/subscriptions` | List monthly statuses or create a subscription (admin) |
 | `PUT/DELETE` | `/admin/subscriptions/{id}` | Update or delete a subscription (admin) |

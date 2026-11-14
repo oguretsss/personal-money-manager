@@ -116,8 +116,67 @@ def add_transaction_fields(parser, *, required):
     parser.add_argument("--note")
 
 
+def add_date_range(parser, *, required=False):
+    parser.add_argument("--start", type=date.fromisoformat, required=required, help="inclusive date, YYYY-MM-DD")
+    parser.add_argument("--end", type=date.fromisoformat, required=required, help="exclusive date, YYYY-MM-DD")
+
+
+def add_pagination(parser):
+    parser.add_argument("--page", type=positive_int)
+    parser.add_argument("--per-page", type=positive_int)
+
+
+def add_month(parser):
+    parser.add_argument("--year", type=int)
+    parser.add_argument("--month", type=int, choices=range(1, 13))
+
+
+def add_budget_commands(commands):
+    commands.add_parser("members", help="list family members and their IDs")
+    commands.add_parser("whoami", help="show the connected account and granted permissions")
+
+    spending = commands.add_parser("spending", help="summarize expenses by member and category")
+    add_date_range(spending, required=True)
+    spending.add_argument("--user-id", type=positive_int)
+
+    for resource in ("category", "space"):
+        create = commands.add_parser(f"{resource}-add", help=f"create a shared {resource}")
+        create.add_argument("name")
+        if resource == "category":
+            create.add_argument("--type", choices=("income", "expense"), required=True)
+
+        rename = commands.add_parser(f"{resource}-rename", help=f"rename a shared {resource}")
+        rename.add_argument("id", type=positive_int)
+        rename.add_argument("name")
+        delete = commands.add_parser(f"{resource}-delete", help=f"delete an unused {resource}")
+        delete.add_argument("id", type=positive_int)
+
+    commands.add_parser("spaces", help="list shared savings spaces and current balances")
+    transfers = commands.add_parser("transfers", help="list savings transfers")
+    transfers.add_argument("--space-id", type=positive_int)
+    transfers.add_argument("--user-id", type=positive_int)
+    add_date_range(transfers)
+    add_pagination(transfers)
+
+    transfer = commands.add_parser("transfer", help="record a ledger movement to or from an existing savings space")
+    transfer.add_argument("space_name")
+    transfer.add_argument("--direction", choices=("to_space", "from_space"), required=True)
+    transfer.add_argument("--amount", type=money, required=True)
+    transfer.add_argument("--date", dest="happened_at", type=date.fromisoformat)
+    transfer.add_argument("--note")
+
+    add_month(commands.add_parser("limits", help="show monthly category limits and progress"))
+    set_limit = commands.add_parser("limit-set", help="set an expense category's monthly limit")
+    set_limit.add_argument("id", type=positive_int)
+    set_limit.add_argument("--amount", type=money, required=True)
+    delete_limit = commands.add_parser("limit-delete", help="remove a category's monthly limit")
+    delete_limit.add_argument("id", type=positive_int)
+
+    add_month(commands.add_parser("subscriptions", help="show recorded recurring expenses and payment status"))
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(description="Use the MoneyManage API with a personal token.")
+    parser = argparse.ArgumentParser(description="Manage the family budget with the MoneyManage API.")
     commands = parser.add_subparsers(dest="command", required=True)
 
     find = commands.add_parser("find", help="find transactions and their IDs")
@@ -125,21 +184,22 @@ def build_parser():
     find.add_argument("--type", choices=("income", "expense"))
     find.add_argument("--category")
     find.add_argument("--q", help="literal substring in the note")
-    find.add_argument("--mine", action="store_true", default=None)
-    find.add_argument("--page", type=positive_int)
-    find.add_argument("--per-page", type=positive_int)
+    owner = find.add_mutually_exclusive_group()
+    owner.add_argument("--mine", action="store_true", default=None)
+    owner.add_argument("--user-id", type=positive_int)
+    add_pagination(find)
 
     summary = commands.add_parser("summary", help="get household totals and category breakdowns")
     for period in (find, summary):
-        period.add_argument("--start", type=date.fromisoformat, help="inclusive date, YYYY-MM-DD")
-        period.add_argument("--end", type=date.fromisoformat, help="exclusive date, YYYY-MM-DD")
+        add_date_range(period)
 
     categories = commands.add_parser("categories", help="list available categories")
-    categories.add_argument("--type", choices=("income", "expense"), required=True)
+    categories.add_argument("--type", choices=("income", "expense"), help="return names using the original category listing")
 
     add = commands.add_parser("add", help="create a transaction")
     add.add_argument("--type", choices=("income", "expense"), required=True)
     add_transaction_fields(add, required=True)
+    add.add_argument("--allow-duplicate", action="store_true", help="record an expense despite a duplicate warning")
 
     edit = commands.add_parser("edit", help="change selected fields of a transaction")
     edit.add_argument("id", type=positive_int)
@@ -147,29 +207,59 @@ def build_parser():
 
     delete = commands.add_parser("delete", help="delete a transaction by ID")
     delete.add_argument("id", type=positive_int)
+    add_budget_commands(commands)
     return parser
+
+
+READ_ENDPOINTS = {
+    "find": "/transactions",
+    "members": "/family/members",
+    "whoami": "/family/me",
+    "spending": "/spending",
+    "spaces": "/spaces",
+    "transfers": "/spaces/transfers",
+    "limits": "/limits",
+    "subscriptions": "/subscriptions",
+}
 
 
 def run_command(args):
     fields = {key: value for key, value in vars(args).items() if key != "command" and value is not None}
-    if args.command == "find":
-        return request_api("GET", "/transactions", query=fields)
+    start, end = fields.get("start"), fields.get("end")
+    if start and end and start >= end:
+        raise ClientError("--end must be after --start.")
+    if args.command in ("limits", "subscriptions") and ("year" in fields) != ("month" in fields):
+        raise ClientError("Supply both --year and --month, or omit both for the current month.")
+    if args.command in READ_ENDPOINTS:
+        return request_api("GET", READ_ENDPOINTS[args.command], query=fields)
     if args.command == "summary":
-        if (args.start is None) != (args.end is None):
+        if (start is None) != (end is None):
             raise ClientError("Supply both --start and --end, or omit both for the current month.")
-        if args.start and args.start >= args.end:
-            raise ClientError("--end must be after --start.")
         return request_api("GET", "/summary", query={
             key: f"{value.isoformat()}T00:00:00" for key, value in fields.items()
         })
     if args.command == "categories":
-        return request_api("GET", "/categories", query=fields)
+        return request_api("GET", "/categories" if args.type else "/categories/details", query=fields)
     if args.command == "delete":
         return request_api("DELETE", f"/transactions/{args.id}")
+    if args.command.startswith(("category-", "space-", "limit-")):
+        resource, action = args.command.split("-")
+        collection = {"category": "categories", "space": "spaces", "limit": "limits"}[resource]
+        endpoint = f"/{collection}"
+        if action == "add":
+            return request_api("POST", endpoint, query=fields)
+        identifier = fields.pop("id")
+        method = "DELETE" if action == "delete" else "PUT"
+        return request_api(method, f"{endpoint}/{identifier}", payload=fields or None)
 
-    if args.happened_at:
-        fields["happened_at"] = f"{args.happened_at.isoformat()}T00:00:00"
+    if happened_at := fields.get("happened_at"):
+        fields["happened_at"] = f"{happened_at.isoformat()}T00:00:00"
+    if args.command == "transfer":
+        return request_api("POST", "/spaces/transfer", query={"existing_only": "true"}, payload=fields)
     if args.command == "add":
+        allow_duplicate = fields.pop("allow_duplicate")
+        if args.type == "expense":
+            fields["check_duplicates"] = not allow_duplicate
         return request_api("POST", "/transactions", payload=fields)
     fields.pop("id")
     if not fields:

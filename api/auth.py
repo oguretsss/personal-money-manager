@@ -13,18 +13,22 @@ from models import ApiToken, User
 
 
 SCOPE_FAMILY_READ = "family:read"
+SCOPE_CATEGORIES_WRITE = "categories:write"
 SCOPE_TRANSACTIONS_WRITE = "transactions:write"
 SCOPE_TRANSACTIONS_DELETE = "transactions:delete"
 SCOPE_SPACES_WRITE = "spaces:write"
+SCOPE_SPACES_MANAGE = "spaces:manage"
 SCOPE_REPORTS_SEND = "reports:send"
 SCOPE_ACT_AS_TELEGRAM_USER = "act_as_telegram_user"
 SCOPE_ADMIN = "admin"
 
 ALL_SCOPES = frozenset({
     SCOPE_FAMILY_READ,
+    SCOPE_CATEGORIES_WRITE,
     SCOPE_TRANSACTIONS_WRITE,
     SCOPE_TRANSACTIONS_DELETE,
     SCOPE_SPACES_WRITE,
+    SCOPE_SPACES_MANAGE,
     SCOPE_REPORTS_SEND,
     SCOPE_ACT_AS_TELEGRAM_USER,
     SCOPE_ADMIN,
@@ -205,6 +209,15 @@ def require_admin(
     auth: AuthContext = Depends(require_scopes(SCOPE_ADMIN)),
 ) -> AuthContext:
     return auth
+
+
+def require_family_manager(scope: str):
+    def dependency(auth: AuthContext = Depends(require_scopes(scope))) -> AuthContext:
+        if auth.principal_type != "user" and not auth.has_scope(SCOPE_ADMIN):
+            raise HTTPException(status_code=403, detail="A personal token is required")
+        return auth
+
+    return dependency
 
 
 def resolve_request_user(

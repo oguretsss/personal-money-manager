@@ -48,13 +48,16 @@ from auth import (
     AuthContext,
     SCOPE_ACT_AS_TELEGRAM_USER,
     SCOPE_ADMIN,
+    SCOPE_CATEGORIES_WRITE,
     SCOPE_FAMILY_READ,
     SCOPE_REPORTS_SEND,
     SCOPE_SPACES_WRITE,
+    SCOPE_SPACES_MANAGE,
     SCOPE_TRANSACTIONS_DELETE,
     SCOPE_TRANSACTIONS_WRITE,
     create_stored_token,
     require_admin,
+    require_family_manager,
     require_scopes,
     resolve_request_user,
 )
@@ -802,6 +805,8 @@ def admin_create_api_token(
             status_code=400,
             detail="telegram_id is only valid for a user token",
         )
+    elif scopes.intersection({SCOPE_CATEGORIES_WRITE, SCOPE_SPACES_MANAGE}):
+        raise HTTPException(status_code=400, detail="Budget management scopes require a user token")
 
     write_scopes = {
         SCOPE_TRANSACTIONS_WRITE,
@@ -920,8 +925,8 @@ def create_transaction(
 
     happened_at = payload.happened_at or datetime.utcnow()
     amount_cents = transaction_amount_to_cents(payload.amount)
+    begin_transaction_mutation(session)
     if tx_type == "expense" and payload.check_duplicates:
-        begin_transaction_mutation(session)
         owner_id = None if auth.has_scope(SCOPE_FAMILY_READ) else user.telegram_id
         warning = find_expense_duplicates(session, amount_cents, happened_at, owner_id=owner_id)
         if warning:
@@ -1004,6 +1009,7 @@ def list_transactions(
     q: str | None = Query(default=None, min_length=1, max_length=200),
     start: date | None = None,
     end: date | None = None,
+    user_id: int | None = Query(default=None, gt=0, lt=2**63),
     mine: bool = False,
     page: int = Query(default=1, ge=1, le=1_000_000),
     per_page: int = Query(default=25, ge=1, le=100),
@@ -1011,6 +1017,8 @@ def list_transactions(
     session: Session = Depends(get_session),
 ):
     """Search the household ledger. Date bounds use an exclusive end."""
+    if mine and user_id is not None:
+        raise HTTPException(status_code=400, detail="Use either mine or user_id")
     user = resolve_request_user(auth, None, session, required=mine)
     if start and end and start >= end:
         raise HTTPException(status_code=400, detail="End date must be after start date")
@@ -1030,6 +1038,8 @@ def list_transactions(
         filters.append(Transaction.happened_at < datetime.combine(end, time.min))
     if mine:
         filters.append(Transaction.created_by_telegram_id == user.telegram_id)
+    elif user_id is not None:
+        filters.append(Transaction.created_by_telegram_id == user_id)
 
     stmt = (
         select(Transaction, Category.name, User.name)
@@ -1053,9 +1063,95 @@ def list_transactions(
                 "happened_at": tx.happened_at.isoformat(),
                 "note": tx.note,
                 "created_by": creator_name,
+                "created_by_telegram_id": tx.created_by_telegram_id,
                 "is_mine": user is not None and tx.created_by_telegram_id == user.telegram_id,
             }
             for tx, category_name, creator_name in rows[:per_page]
+        ],
+    }
+
+
+@app.get("/family/members", dependencies=[Depends(require_scopes(SCOPE_FAMILY_READ))])
+def list_family_members(session: Session = Depends(get_session)):
+    users = session.exec(select(User).order_by(User.name, User.telegram_id)).all()
+    return [
+        {"id": user.telegram_id, "name": user.name, "active": user.is_active}
+        for user in users
+    ]
+
+
+@app.get("/family/me")
+def family_profile(
+    auth: AuthContext = Depends(require_scopes(SCOPE_FAMILY_READ)),
+    session: Session = Depends(get_session),
+):
+    user = resolve_request_user(auth, None, session, required=False)
+    return {
+        "id": user.telegram_id if user else None,
+        "name": user.name if user else auth.name,
+        "role": user.role if user else None,
+        "principal_type": auth.principal_type,
+        "scopes": sorted(auth.scopes),
+    }
+
+
+@app.get("/spending", dependencies=[Depends(require_scopes(SCOPE_FAMILY_READ))])
+def spending_report(
+    start: date,
+    end: date,
+    user_id: int | None = Query(default=None, gt=0, lt=2**63),
+    session: Session = Depends(get_session),
+):
+    if start >= end:
+        raise HTTPException(status_code=400, detail="End date must be after start date")
+    stmt = (
+        select(
+            Transaction.created_by_telegram_id, User.name, Category.name,
+            func.count(Transaction.id), func.sum(Transaction.amount_cents),
+        )
+        .outerjoin(User, Transaction.created_by_telegram_id == User.telegram_id)
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .where(
+            Transaction.type == "expense",
+            Transaction.happened_at >= datetime.combine(start, time.min),
+            Transaction.happened_at < datetime.combine(end, time.min),
+        )
+        .group_by(Transaction.created_by_telegram_id, User.name, Category.name)
+        .order_by(Transaction.created_by_telegram_id, func.sum(Transaction.amount_cents).desc(), Category.name)
+    )
+    if user_id is not None:
+        stmt = stmt.where(Transaction.created_by_telegram_id == user_id)
+    by_category = defaultdict(int)
+    members = {}
+    count = 0
+    for member_id, name, category, row_count, cents in session.exec(stmt):
+        category = category if category is not None else "Unknown"
+        member = members.setdefault(member_id, {
+            "id": member_id, "name": name, "expense_cents": 0, "count": 0, "by_category": [],
+        })
+        member["expense_cents"] += cents
+        member["count"] += row_count
+        member["by_category"].append({"category": category, "total": cents / 100})
+        by_category[category] += cents
+        count += row_count
+    return {
+        "start": start,
+        "end": end,
+        "expense_total": sum(by_category.values()) / 100,
+        "count": count,
+        "by_category": [
+            {"category": category, "total": cents / 100}
+            for category, cents in sorted(by_category.items(), key=lambda row: (-row[1], row[0]))
+        ],
+        "by_member": [
+            {
+                "id": member["id"],
+                "name": member["name"],
+                "expense_total": member["expense_cents"] / 100,
+                "count": member["count"],
+                "by_category": member["by_category"],
+            }
+            for member in sorted(members.values(), key=lambda row: (-row["expense_cents"], row["id"]))
         ],
     }
 
@@ -1241,16 +1337,6 @@ def top_spaces(
     rows = session.exec(stmt).all()
     return [r[0] for r in rows]
 
-def get_or_create_space(session: Session, name: str) -> Space:
-    s = session.exec(select(Space).where(Space.name == name)).first()
-    if s:
-        return s
-    s = Space(name=name)
-    session.add(s)
-    session.commit()
-    session.refresh(s)
-    return s
-
 @app.get("/spaces")
 def list_spaces(
     telegram_id: int | None = None,
@@ -1284,10 +1370,62 @@ def list_spaces(
 
     return [{"id": sp.id, "name": sp.name, "balance": balances.get(sp.id, 0) / 100.0} for sp in spaces]
 
+
+@app.get("/spaces/transfers", dependencies=[Depends(require_scopes(SCOPE_FAMILY_READ))])
+def list_space_transfers(
+    space_id: int | None = Query(default=None, gt=0, lt=2**63),
+    user_id: int | None = Query(default=None, gt=0, lt=2**63),
+    start: date | None = None,
+    end: date | None = None,
+    page: int = Query(default=1, ge=1, le=1_000_000),
+    per_page: int = Query(default=25, ge=1, le=100),
+    session: Session = Depends(get_session),
+):
+    if start and end and start >= end:
+        raise HTTPException(status_code=400, detail="End date must be after start date")
+    stmt = (
+        select(SpaceTransfer, Space.name, User.name)
+        .outerjoin(Space, SpaceTransfer.space_id == Space.id)
+        .outerjoin(User, SpaceTransfer.created_by_telegram_id == User.telegram_id)
+    )
+    if space_id is not None:
+        stmt = stmt.where(SpaceTransfer.space_id == space_id)
+    if user_id is not None:
+        stmt = stmt.where(SpaceTransfer.created_by_telegram_id == user_id)
+    if start:
+        stmt = stmt.where(SpaceTransfer.happened_at >= datetime.combine(start, time.min))
+    if end:
+        stmt = stmt.where(SpaceTransfer.happened_at < datetime.combine(end, time.min))
+    rows = session.exec(
+        stmt.order_by(SpaceTransfer.happened_at.desc(), SpaceTransfer.id.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page + 1)
+    ).all()
+    return {
+        "page": page,
+        "has_more": len(rows) > per_page,
+        "items": [
+            {
+                "id": transfer.id,
+                "space_id": transfer.space_id,
+                "space": space_name,
+                "direction": transfer.direction,
+                "amount": transfer.amount_cents / 100,
+                "happened_at": transfer.happened_at.isoformat(),
+                "note": transfer.note,
+                "created_by": creator_name,
+                "created_by_telegram_id": transfer.created_by_telegram_id,
+            }
+            for transfer, space_name, creator_name in rows[:per_page]
+        ],
+    }
+
+
 @app.post("/spaces/transfer")
 def space_transfer(
     payload: SpaceTransferCreate,
     telegram_id: int | None = None,
+    existing_only: bool = False,
     auth: AuthContext = Depends(require_scopes(SCOPE_SPACES_WRITE)),
     session: Session = Depends(get_session),
 ):
@@ -1297,9 +1435,17 @@ def space_transfer(
     if direction not in ("to_space", "from_space"):
         raise HTTPException(status_code=400, detail="Invalid direction")
 
-    sp = get_or_create_space(session, payload.space_name.strip())
-    amount_cents = int(round(payload.amount * 100))
+    name = budget_item_name(payload.space_name)
+    amount_cents = transaction_amount_to_cents(payload.amount)
     happened_at = payload.happened_at or datetime.utcnow()
+    begin_transaction_mutation(session)
+    sp = session.exec(select(Space).where(Space.name == name)).first()
+    if sp is None:
+        if existing_only:
+            raise HTTPException(status_code=404, detail="Space not found")
+        sp = Space(name=name)
+        session.add(sp)
+        session.flush()
 
     # если выводим из space — проверим, что там хватает
     if direction == "from_space":
@@ -1325,9 +1471,10 @@ def space_transfer(
         created_by_telegram_id=user.telegram_id,
     )
     session.add(tr)
+    session.flush()
+    result = {"id": tr.id, "ok": True}
     session.commit()
-    session.refresh(tr)
-    return {"id": tr.id, "ok": True}
+    return result
 
 
 # ── Admin CRUD endpoints ──────────────────────────────────────────────
@@ -1447,8 +1594,8 @@ def admin_create_transaction(payload: AdminTransactionCreate, session: Session =
 
     happened_at = payload.happened_at or datetime.utcnow()
     amount_cents = amount_to_cents(payload.amount)
+    begin_transaction_mutation(session)
     if tx_type == "expense" and payload.check_duplicates:
-        begin_transaction_mutation(session)
         warning = find_expense_duplicates(session, amount_cents, happened_at)
         if warning:
             return warning
@@ -1665,8 +1812,9 @@ def list_subscriptions_for_period(
     }
 
 
+@app.get("/subscriptions", dependencies=[Depends(require_scopes(SCOPE_FAMILY_READ))])
 @app.get("/admin/subscriptions", dependencies=[Depends(require_admin)])
-def admin_list_subscriptions(
+def list_subscriptions(
     year: int | None = Query(default=None, ge=2000, le=2100),
     month: int | None = Query(default=None, ge=1, le=12),
     session: Session = Depends(get_session),
@@ -1680,6 +1828,7 @@ def admin_create_subscription(
     payload: SubscriptionCreate,
     session: Session = Depends(get_session),
 ):
+    begin_transaction_mutation(session)
     validate_subscription_references(
         session,
         payload.category_id,
@@ -1711,6 +1860,7 @@ def admin_update_subscription(
     payload: SubscriptionUpdate,
     session: Session = Depends(get_session),
 ):
+    begin_transaction_mutation(session)
     subscription = session.get(Subscription, subscription_id)
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
@@ -1900,6 +2050,7 @@ def admin_update_income_sort_template(
     payload: IncomeSortTemplateUpdate,
     session: Session = Depends(get_session),
 ):
+    begin_transaction_mutation(session)
     allocations = validate_income_sort_allocations(session, payload.allocations)
     replace_income_sort_template(session, telegram_id, allocations)
     session.commit()
@@ -1996,8 +2147,16 @@ def admin_undo_income_sort(tx_id: int, session: Session = Depends(get_session)):
     return {"ok": True}
 
 
+def budget_item_name(value: str) -> str:
+    name = value.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    return name
+
+
+@app.get("/categories/details", dependencies=[Depends(require_scopes(SCOPE_FAMILY_READ))])
 @app.get("/admin/categories", dependencies=[Depends(require_admin)])
-def admin_list_categories(session: Session = Depends(get_session)):
+def list_category_details(session: Session = Depends(get_session)):
     usage_counts = dict(
         session.exec(
             select(Transaction.category_id, func.count(Transaction.id))
@@ -2033,36 +2192,44 @@ def admin_list_categories(session: Session = Depends(get_session)):
     ]
 
 
+@app.post("/categories", dependencies=[Depends(require_family_manager(SCOPE_CATEGORIES_WRITE))])
 @app.post("/admin/categories", dependencies=[Depends(require_admin)])
-def admin_create_category(name: str, type: str, session: Session = Depends(get_session)):
+def create_category(name: str, type: str, session: Session = Depends(get_session)):
     if type not in ("income", "expense"):
         raise HTTPException(status_code=400, detail="Invalid type")
+    name = budget_item_name(name)
+    begin_transaction_mutation(session)
     existing = session.exec(select(Category).where(Category.name == name)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Category with this name already exists")
-    cat = Category(name=name.strip(), type=type)
+    cat = Category(name=name, type=type)
     session.add(cat)
     session.commit()
     session.refresh(cat)
     return {"id": cat.id, "name": cat.name, "type": cat.type, "ok": True}
 
 
+@app.put("/categories/{cat_id}", dependencies=[Depends(require_family_manager(SCOPE_CATEGORIES_WRITE))])
 @app.put("/admin/categories/{cat_id}", dependencies=[Depends(require_admin)])
-def admin_update_category(cat_id: int, payload: CategoryUpdate, session: Session = Depends(get_session)):
+def update_category(cat_id: int, payload: CategoryUpdate, session: Session = Depends(get_session)):
+    name = budget_item_name(payload.name)
+    begin_transaction_mutation(session)
     cat = session.get(Category, cat_id)
     if not cat:
         raise HTTPException(status_code=404, detail="Not found")
-    existing = session.exec(select(Category).where(Category.name == payload.name, Category.id != cat_id)).first()
+    existing = session.exec(select(Category).where(Category.name == name, Category.id != cat_id)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Category with this name already exists")
-    cat.name = payload.name
+    cat.name = name
     session.add(cat)
     session.commit()
     return {"ok": True}
 
 
+@app.delete("/categories/{cat_id}", dependencies=[Depends(require_family_manager(SCOPE_CATEGORIES_WRITE))])
 @app.delete("/admin/categories/{cat_id}", dependencies=[Depends(require_admin)])
-def admin_delete_category(cat_id: int, session: Session = Depends(get_session)):
+def delete_category(cat_id: int, session: Session = Depends(get_session)):
+    begin_transaction_mutation(session)
     cat = session.get(Category, cat_id)
     if not cat:
         raise HTTPException(status_code=404, detail="Not found")
@@ -2087,8 +2254,9 @@ def admin_delete_category(cat_id: int, session: Session = Depends(get_session)):
     return {"ok": True}
 
 
+@app.get("/limits", dependencies=[Depends(require_scopes(SCOPE_FAMILY_READ))])
 @app.get("/admin/limits", dependencies=[Depends(require_admin)])
-def admin_list_limits(
+def list_limits(
     year: int | None = Query(default=None, ge=2000, le=2100),
     month: int | None = Query(default=None, ge=1, le=12),
     session: Session = Depends(get_session),
@@ -2097,21 +2265,21 @@ def admin_list_limits(
     return list_category_limit_progress(session, period_start, period_end)
 
 
+@app.put("/limits/{category_id}", dependencies=[Depends(require_family_manager(SCOPE_CATEGORIES_WRITE))])
 @app.put("/admin/limits/{category_id}", dependencies=[Depends(require_admin)])
-def admin_set_limit(
+def set_limit(
     category_id: int,
     payload: CategoryLimitUpdate,
     session: Session = Depends(get_session),
 ):
+    amount_cents = transaction_amount_to_cents(payload.amount)
+    begin_transaction_mutation(session)
     category = session.get(Category, category_id)
     if not category:
         raise HTTPException(status_code=404, detail="Category not found")
     if category.type != "expense":
         raise HTTPException(status_code=400, detail="Limits can only be set for expense categories")
 
-    amount_cents = amount_to_cents(payload.amount)
-    if amount_cents <= 0:
-        raise HTTPException(status_code=400, detail="Limit must be at least €0.01")
     category_limit = session.exec(
         select(CategoryLimit).where(CategoryLimit.category_id == category_id)
     ).first()
@@ -2124,13 +2292,16 @@ def admin_set_limit(
             amount_cents=amount_cents,
         )
     session.add(category_limit)
+    session.flush()
+    progress = get_category_limit_progress(session, category_id, datetime.utcnow())
     session.commit()
-    session.refresh(category_limit)
-    return get_category_limit_progress(session, category_id, datetime.utcnow())
+    return progress
 
 
+@app.delete("/limits/{category_id}", dependencies=[Depends(require_family_manager(SCOPE_CATEGORIES_WRITE))])
 @app.delete("/admin/limits/{category_id}", dependencies=[Depends(require_admin)])
-def admin_delete_limit(category_id: int, session: Session = Depends(get_session)):
+def delete_limit(category_id: int, session: Session = Depends(get_session)):
+    begin_transaction_mutation(session)
     category_limit = session.exec(
         select(CategoryLimit).where(CategoryLimit.category_id == category_id)
     ).first()
@@ -2157,34 +2328,42 @@ def admin_list_spaces(session: Session = Depends(get_session)):
     return result
 
 
+@app.post("/spaces", dependencies=[Depends(require_family_manager(SCOPE_SPACES_MANAGE))])
 @app.post("/admin/spaces", dependencies=[Depends(require_admin)])
-def admin_create_space(name: str, session: Session = Depends(get_session)):
+def create_space(name: str, session: Session = Depends(get_session)):
+    name = budget_item_name(name)
+    begin_transaction_mutation(session)
     existing = session.exec(select(Space).where(Space.name == name)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Space with this name already exists")
-    sp = Space(name=name.strip())
+    sp = Space(name=name)
     session.add(sp)
     session.commit()
     session.refresh(sp)
     return {"id": sp.id, "name": sp.name, "ok": True}
 
 
+@app.put("/spaces/{space_id}", dependencies=[Depends(require_family_manager(SCOPE_SPACES_MANAGE))])
 @app.put("/admin/spaces/{space_id}", dependencies=[Depends(require_admin)])
-def admin_update_space(space_id: int, payload: SpaceUpdate, session: Session = Depends(get_session)):
+def update_space(space_id: int, payload: SpaceUpdate, session: Session = Depends(get_session)):
+    name = budget_item_name(payload.name)
+    begin_transaction_mutation(session)
     sp = session.get(Space, space_id)
     if not sp:
         raise HTTPException(status_code=404, detail="Not found")
-    existing = session.exec(select(Space).where(Space.name == payload.name, Space.id != space_id)).first()
+    existing = session.exec(select(Space).where(Space.name == name, Space.id != space_id)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Space with this name already exists")
-    sp.name = payload.name
+    sp.name = name
     session.add(sp)
     session.commit()
     return {"ok": True}
 
 
+@app.delete("/spaces/{space_id}", dependencies=[Depends(require_family_manager(SCOPE_SPACES_MANAGE))])
 @app.delete("/admin/spaces/{space_id}", dependencies=[Depends(require_admin)])
-def admin_delete_space(space_id: int, session: Session = Depends(get_session)):
+def delete_space(space_id: int, session: Session = Depends(get_session)):
+    begin_transaction_mutation(session)
     sp = session.get(Space, space_id)
     if not sp:
         raise HTTPException(status_code=404, detail="Not found")

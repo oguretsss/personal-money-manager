@@ -25,7 +25,10 @@ from fastapi.routing import APIRoute
 from sqlmodel import Session, SQLModel, select
 
 from auth import (
+    SCOPE_CATEGORIES_WRITE,
     SCOPE_FAMILY_READ,
+    SCOPE_SPACES_MANAGE,
+    SCOPE_SPACES_WRITE,
     SCOPE_TRANSACTIONS_DELETE,
     SCOPE_TRANSACTIONS_WRITE,
     create_stored_token,
@@ -514,6 +517,113 @@ class ApiAuthenticationTests(unittest.TestCase):
         self.assertEqual(self.client.delete(path, headers=credentials[1103]).status_code, 403)
         self.assertEqual(self.client.delete(path, headers=credentials[1101]).status_code, 200)
         self.assertEqual(search(id=own_id), [])
+
+    def test_spending_breakdown_and_member_filter_for_separate_personal_tokens(self):
+        credentials = {}
+        for user_id in (1201, 1202):
+            self.add_user(user_id)
+            _, token = self.create_token(
+                name="Family member", principal_type="user", telegram_id=user_id,
+                scopes={SCOPE_FAMILY_READ, SCOPE_TRANSACTIONS_WRITE},
+            )
+            credentials[user_id] = self.bearer(token)
+            response = self.client.post("/transactions", headers=credentials[user_id], json={
+                "type": "expense", "amount": 10 if user_id == 1201 else 20,
+                "category_name": "Food", "happened_at": "2026-11-14T08:00:00",
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+
+        headers = credentials[1201]
+        self.assertEqual(self.client.get("/family/me", headers=headers).json()["id"], 1201)
+        self.assertEqual(
+            [member["id"] for member in self.client.get("/family/members", headers=headers).json()],
+            [1201, 1202],
+        )
+        period = {"start": "2026-11-14", "end": "2026-11-15"}
+        report = self.client.get("/spending", headers=headers, params=period).json()
+        self.assertEqual((report["expense_total"], report["count"]), (30, 2))
+        self.assertEqual(report["by_category"], [{"category": "Food", "total": 30}])
+        self.assertEqual({row["id"]: row["expense_total"] for row in report["by_member"]}, {1201: 10, 1202: 20})
+        individual = {**period, "user_id": 1202}
+        single = self.client.get("/spending", headers=headers, params=individual).json()
+        self.assertEqual(single["expense_total"], 20)
+        items = self.client.get("/transactions", headers=headers, params=individual).json()["items"]
+        self.assertEqual([item["created_by_telegram_id"] for item in items], [1202])
+        self.assertFalse(items[0]["is_mine"])
+        self.assertEqual(self.client.get(
+            "/transactions", headers=headers, params={**individual, "mine": True},
+        ).status_code, 400)
+
+    def test_family_budget_scopes_manage_shared_resources_without_admin_access(self):
+        self.add_user(1203)
+        self.add_user(1204)
+        _, read_token = self.create_token(
+            name="Family read", principal_type="service", telegram_id=None,
+            scopes={SCOPE_FAMILY_READ},
+        )
+        scopes = {SCOPE_FAMILY_READ, SCOPE_CATEGORIES_WRITE, SCOPE_SPACES_WRITE, SCOPE_SPACES_MANAGE}
+        credentials = {}
+        for user_id in (1203, 1204):
+            response = self.client.post("/admin/api-tokens", headers=self.bearer(ADMIN_TOKEN), json={
+                "name": "Family manager", "principal_type": "user", "telegram_id": user_id,
+                "scopes": sorted(scopes),
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+            credentials[user_id] = self.bearer(response.json()["token"])
+        first, second = credentials[1203], credentials[1204]
+        read_only = self.bearer(read_token)
+
+        service = self.client.post("/admin/api-tokens", headers=self.bearer(ADMIN_TOKEN), json={
+            "name": "Invalid shared manager", "principal_type": "service",
+            "scopes": [SCOPE_CATEGORIES_WRITE, SCOPE_SPACES_MANAGE],
+        })
+        self.assertEqual(service.status_code, 400)
+        self.assertEqual(self.client.get("/admin/api-tokens", headers=first).status_code, 403)
+
+        category = {"name": "Furniture", "type": "expense"}
+        self.assertEqual(self.client.post("/categories", params=category, headers=read_only).status_code, 403)
+        response = self.client.post("/categories", params=category, headers=first)
+        self.assertEqual(response.status_code, 200, response.text)
+        category_id = response.json()["id"]
+        self.assertEqual(self.client.put(
+            f"/categories/{category_id}", headers=second, json={"name": "Home"},
+        ).status_code, 200)
+        self.assertEqual(self.client.get("/categories/details", headers=read_only).json()[0]["name"], "Home")
+        self.assertEqual(self.client.get("/categories", headers=read_only, params={"type": "expense"}).json(), ["Home"])
+        self.assertEqual(self.client.put(
+            f"/limits/{category_id}", headers=second, json={"amount": 100},
+        ).status_code, 200)
+        self.assertEqual(self.client.get("/limits", headers=read_only).json()[0]["limit"], 100)
+        self.assertEqual(self.client.delete(f"/limits/{category_id}", headers=first).status_code, 200)
+        self.assertEqual(self.client.delete(f"/categories/{category_id}", headers=second).status_code, 200)
+
+        space_response = self.client.post("/spaces", headers=first, params={"name": "Travel"})
+        self.assertEqual(space_response.status_code, 200, space_response.text)
+        space_id = space_response.json()["id"]
+        space_path = f"/spaces/{space_id}"
+        self.assertEqual(self.client.put(space_path, headers=read_only, json={"name": "Trip"}).status_code, 403)
+        self.assertEqual(self.client.put(space_path, headers=second, json={"name": "Trip"}).status_code, 200)
+        self.assertEqual(self.client.post(
+            "/spaces/transfer", headers=first, params={"existing_only": True},
+            json={"space_name": "Typo", "direction": "to_space", "amount": 100},
+        ).status_code, 404)
+        for token_headers, direction, amount in ((first, "to_space", 100), (second, "from_space", 25)):
+            response = self.client.post("/spaces/transfer", headers=token_headers, json={
+                "space_name": "Trip", "direction": direction, "amount": amount,
+            })
+            self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.client.get("/spaces", headers=read_only).json(), [
+            {"id": space_id, "name": "Trip", "balance": 75},
+        ])
+        self.assertEqual(self.client.post("/spaces/transfer", headers=second, json={
+            "space_name": "Trip", "direction": "from_space", "amount": 76,
+        }).status_code, 400)
+        self.assertEqual(self.client.delete(space_path, headers=second).status_code, 400)
+        transfers = self.client.get("/spaces/transfers", headers=read_only, params={
+            "space_id": space_id, "user_id": 1204,
+        }).json()
+        self.assertEqual([item["amount"] for item in transfers["items"]], [25])
+        self.assertEqual(self.client.get("/subscriptions", headers=read_only).json()["items"], [])
 
     def test_revoked_token_is_rejected(self):
         self.add_user(1007)
