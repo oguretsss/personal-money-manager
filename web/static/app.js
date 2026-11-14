@@ -93,7 +93,7 @@ function parseBankAmount(value) {
     return Number(normalized);
 }
 
-function parseCsv(text) {
+function parseCsv(text, delimiter = ',') {
     const rows = [];
     let row = [];
     let field = '';
@@ -113,7 +113,7 @@ function parseCsv(text) {
             continue;
         }
 
-        if (ch === ',' && !inQuotes) {
+        if (ch === delimiter && !inQuotes) {
             row.push(field);
             field = '';
             continue;
@@ -131,6 +131,7 @@ function parseCsv(text) {
         field += ch;
     }
 
+    if (inQuotes) return null;
     row.push(field);
     if (row.some(cell => cell !== '')) rows.push(row);
     return rows;
@@ -836,13 +837,26 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
 
             try {
                 const text = await file.text();
-                const rows = parseCsv(text);
+                let rows = parseCsv(text);
+                let header = rows?.[0]?.map(normalizeCsvHeader) ?? [];
+                const hasRequiredColumns = columns => columns.includes('started date') && columns.includes('amount');
+                if (!hasRequiredColumns(header)) {
+                    const fallbackRows = parseCsv(text, ';');
+                    const fallbackHeader = fallbackRows?.[0]?.map(normalizeCsvHeader) ?? [];
+                    if (hasRequiredColumns(fallbackHeader)) {
+                        rows = fallbackRows;
+                        header = fallbackHeader;
+                    }
+                }
+                if (!rows) {
+                    this.csvErrors.push('Could not read this CSV file.');
+                    return;
+                }
                 if (rows.length < 2) {
                     this.csvErrors.push('CSV has no transaction rows.');
                     return;
                 }
 
-                const header = rows[0].map(normalizeCsvHeader);
                 const indexes = {
                     startedDate: header.indexOf('started date'),
                     amount: header.indexOf('amount'),

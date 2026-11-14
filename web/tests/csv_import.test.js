@@ -55,6 +55,43 @@ test('imports expenses from the new vendor CSV without using vendor categories',
     assert.equal(page.$refs.csvInput.value, '');
 });
 
+test('imports a Numbers export with semicolons and decimal commas', async () => {
+    const app = loadAppScript();
+    const page = app.transactionsPage({ items: [] }, [], []);
+    page.$refs = {};
+    const csv = [
+        '\uFEFFType;Started Date;Description;Amount;Currency',
+        'CARD_PAYMENT;2026-07-26 14:05:00;"Coffee, Inc.; ""To go""";-6,95;EUR',
+        'TRANSFER;2026-07-27;Salary;100,00;EUR',
+    ].join('\r\n');
+
+    await page.handleCsvFile({ name: 'numbers.csv', text: async () => csv });
+
+    assert.equal(page.csvErrors.length, 0);
+    assert.equal(page.csvSkippedIncomeCount, 1);
+    assert.equal(page.csvSkippedInvalidCount, 0);
+    assert.equal(page.csvRows.length, 1);
+    assert.equal(page.csvRows[0].happened_at, '2026-07-26T14:05');
+    assert.equal(page.csvRows[0].amount, '6.95');
+    assert.equal(page.csvRows[0].note, 'Coffee, Inc.; "To go"');
+});
+
+test('reports an error when neither CSV delimiter yields a readable statement', async () => {
+    const app = loadAppScript();
+    const page = app.transactionsPage({ items: [] }, [], []);
+    page.$refs = {};
+
+    const unsupported = 'Started Date\tAmount\n2026-07-26\t-6.95';
+    await page.handleCsvFile({ name: 'tabs.csv', text: async () => unsupported });
+    assert.equal(page.csvRows.length, 0);
+    assert.match(page.csvErrors[0], /Missing required column/);
+
+    const malformed = 'Started Date;Amount;Description\n2026-07-26;-6,95;"Unclosed';
+    await page.handleCsvFile({ name: 'malformed.csv', text: async () => malformed });
+    assert.equal(page.csvRows.length, 0);
+    assert.equal(page.csvErrors[0], 'Could not read this CSV file.');
+});
+
 test('rejects invalid statement dates instead of relying on browser date parsing', () => {
     const app = loadAppScript();
 
