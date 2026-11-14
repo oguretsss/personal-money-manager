@@ -140,62 +140,70 @@
 </div>
 
 <!-- Add Transaction Modal -->
-<div x-show="showAdd" x-cloak class="modal-overlay" @click.self="showAdd = false">
+<div x-show="showAdd" x-cloak class="modal-overlay" @click.self="if (!loading) showAdd = false">
     <div class="modal-content">
         <h3>Add Transaction</h3>
-        <div class="grid-2">
-            <div class="form-row">
-                <label>Type</label>
-                <select x-model="addForm.type" @change="addForm.category_name = ''">
-                    <option value="expense">Expense</option>
-                    <option value="income">Income</option>
-                </select>
+        <fieldset :disabled="loading" @input="duplicateWarning = null" @change="duplicateWarning = null">
+            <div class="grid-2">
+                <div class="form-row">
+                    <label>Type</label>
+                    <select x-model="addForm.type" @change="addForm.category_name = ''">
+                        <option value="expense">Expense</option>
+                        <option value="income">Income</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>Amount</label>
+                    <input type="text" inputmode="decimal" x-model="addForm.amount"
+                           placeholder="0.00">
+                </div>
             </div>
-            <div class="form-row">
-                <label>Amount</label>
-                <input type="text" inputmode="decimal" x-model="addForm.amount"
-                       placeholder="0.00">
+            <div class="grid-2">
+                <div class="form-row">
+                    <label>Category</label>
+                    <select x-model="addForm.category_name">
+                        <option value="">Select...</option>
+                        <template x-for="c in categories.filter(c => c.type === addForm.type)" :key="c.id">
+                            <option :value="c.name" x-text="c.name"></option>
+                        </template>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>User</label>
+                    <select x-model="addForm.created_by_telegram_id">
+                        <template x-for="u in users" :key="u.id">
+                            <option :value="u.telegram_id" x-text="u.name"></option>
+                        </template>
+                    </select>
+                </div>
             </div>
-        </div>
-        <div class="grid-2">
-            <div class="form-row">
-                <label>Category</label>
-                <select x-model="addForm.category_name">
-                    <option value="">Select...</option>
-                    <template x-for="c in categories.filter(c => c.type === addForm.type)" :key="c.id">
-                        <option :value="c.name" x-text="c.name"></option>
-                    </template>
-                </select>
+            <div class="grid-2">
+                <div class="form-row">
+                    <label>Date</label>
+                    <input type="date" x-model="addForm.happened_at">
+                </div>
+                <div class="form-row">
+                    <label>Note</label>
+                    <input type="text" x-model="addForm.note" placeholder="Optional">
+                </div>
             </div>
-            <div class="form-row">
-                <label>User</label>
-                <select x-model="addForm.created_by_telegram_id">
-                    <template x-for="u in users" :key="u.id">
-                        <option :value="u.telegram_id" x-text="u.name"></option>
-                    </template>
-                </select>
-            </div>
-        </div>
-        <div class="grid-2">
-            <div class="form-row">
-                <label>Date</label>
-                <input type="date" x-model="addForm.happened_at">
-            </div>
-            <div class="form-row">
-                <label>Note</label>
-                <input type="text" x-model="addForm.note" placeholder="Optional">
-            </div>
-        </div>
+        </fieldset>
         <template x-if="projectedLimit()">
             <div class="limit-notice" :class="`limit-${projectedLimit().status}`">
                 <strong x-text="projectedLimit().title"></strong>
                 <span x-text="projectedLimit().message"></span>
             </div>
         </template>
+        <template x-if="duplicateWarning">
+            <div class="duplicate-warning" role="alert">
+                <strong x-text="duplicateWarningTitle(duplicateWarning)"></strong>
+                <div x-text="duplicateWarningDetails(duplicateWarning)"></div>
+            </div>
+        </template>
         <div class="form-actions">
-            <button @click="showAdd = false" class="secondary">Cancel</button>
+            <button @click="showAdd = false" :disabled="loading" class="secondary">Cancel</button>
             <button @click="submitAdd()" :disabled="loading"
-                    x-text="loading ? 'Saving...' : 'Add Transaction'"></button>
+                    x-text="loading ? 'Saving...' : (duplicateWarning ? 'Add anyway' : 'Add Transaction')"></button>
         </div>
     </div>
 </div>
@@ -245,7 +253,7 @@
         <div class="grid-2">
             <div class="form-row">
                 <label>User</label>
-                <select x-model="csvImportUserId">
+                <select x-model="csvImportUserId" :disabled="loading">
                     <template x-for="u in users" :key="u.id">
                         <option :value="u.telegram_id" x-text="u.name"></option>
                     </template>
@@ -265,7 +273,7 @@
              @drop.prevent="handleCsvDrop($event)">
             <strong>Drop bank CSV here</strong>
             <span>or</span>
-            <button type="button" class="secondary" @click="$refs.csvInput.click()">Choose File</button>
+            <button type="button" class="secondary" @click="$refs.csvInput.click()" :disabled="loading">Choose File</button>
         </div>
 
         <template x-if="csvErrors.length">
@@ -283,10 +291,12 @@
             <div>
                 <div class="import-toolbar">
                     <label class="inline-check">
-                        <input type="checkbox" :checked="allCsvRowsSelected()" @change="setAllCsvRows($event.target.checked)">
+                        <input type="checkbox" :checked="allCsvRowsSelected()" :disabled="loading" @change="setAllCsvRows($event.target.checked)">
                         Select all
                     </label>
                     <span x-text="selectedCsvRowsCount() + ' selected'"></span>
+                    <span x-show="csvRowsNeedingConfirmation().length"
+                          x-text="csvRowsNeedingConfirmation().length + ' need duplicate review'"></span>
                     <span x-show="csvSkippedIncomeCount" x-text="csvSkippedIncomeCount + ' income rows skipped'"></span>
                 </div>
 
@@ -312,24 +322,38 @@
                             <template x-for="row in csvRows" :key="row.id">
                                 <tr :class="{ 'row-muted': !row.selected, 'row-error': row.selected && !row.category_name }">
                                     <td data-label="Use">
-                                        <input type="checkbox" x-model="row.selected" :disabled="row.imported">
+                                        <input type="checkbox" x-model="row.selected" :disabled="loading || row.imported">
                                     </td>
                                     <td data-label="Date">
-                                        <input type="datetime-local" x-model="row.happened_at" :disabled="row.imported">
+                                        <input type="datetime-local" x-model="row.happened_at" :disabled="loading || row.imported"
+                                               @input="clearCsvDuplicateWarning(row)">
                                     </td>
                                     <td data-label="Amount" class="text-right">
-                                        <input type="text" inputmode="decimal" x-model="row.amount" :disabled="row.imported">
+                                        <input type="text" inputmode="decimal" x-model="row.amount" :disabled="loading || row.imported"
+                                               @input="clearCsvDuplicateWarning(row)">
                                     </td>
                                     <td data-label="Category">
-                                        <select x-model="row.category_name" :disabled="row.imported">
+                                        <select x-model="row.category_name" :disabled="loading || row.imported">
                                             <option value="">Select...</option>
                                             <template x-for="c in expenseCategories()" :key="c.id">
                                                 <option :value="c.name" x-text="c.name"></option>
                                             </template>
                                         </select>
                                     </td>
-                                    <td data-label="Note">
-                                        <input type="text" x-model="row.note" :disabled="row.imported">
+                                    <td data-label="Note" class="import-note-cell">
+                                        <div>
+                                            <input type="text" x-model="row.note" :disabled="loading || row.imported">
+                                            <template x-if="row.duplicateWarning">
+                                                <div class="duplicate-warning" role="alert">
+                                                    <strong x-text="duplicateWarningTitle(row.duplicateWarning)"></strong>
+                                                    <div x-text="duplicateWarningDetails(row.duplicateWarning)"></div>
+                                                    <label class="inline-check">
+                                                        <input type="checkbox" x-model="row.allowDuplicate" :disabled="loading || !row.selected">
+                                                        Import anyway
+                                                    </label>
+                                                </div>
+                                            </template>
+                                        </div>
                                     </td>
                                 </tr>
                             </template>
@@ -340,8 +364,8 @@
         </template>
 
         <div class="form-actions">
-            <button @click="closeCsvImport()" class="secondary">Cancel</button>
-            <button @click="submitCsvImport()" :disabled="loading || !selectedCsvRowsCount()"
+            <button @click="closeCsvImport()" :disabled="loading" class="secondary">Cancel</button>
+            <button @click="submitCsvImport()" :disabled="loading || !readyCsvRows().length"
                     x-text="loading ? 'Importing...' : 'Submit Import'"></button>
         </div>
     </div>

@@ -861,6 +861,50 @@ def admin_revoke_api_token(
     return {"ok": True}
 
 
+def find_expense_duplicates(
+    session: Session,
+    amount_cents: int,
+    happened_at: datetime,
+    *,
+    owner_id: int | None = None,
+) -> dict | None:
+    day = happened_at.date()
+    query = (
+        select(Transaction, Category.name, func.count().over())
+        .outerjoin(Category, Transaction.category_id == Category.id)
+        .where(
+            Transaction.type == "expense",
+            Transaction.amount_cents == amount_cents,
+            Transaction.happened_at >= datetime.combine(day, time.min),
+            Transaction.happened_at <= datetime.combine(day, time.max),
+        )
+        .order_by(Transaction.happened_at.desc(), Transaction.id.desc())
+        .limit(3)
+    )
+    if owner_id is not None:
+        query = query.where(Transaction.created_by_telegram_id == owner_id)
+    rows = session.exec(query).all()
+    if not rows:
+        return None
+    return {
+        "ok": False,
+        "possible_duplicates": {
+            "count": rows[0][2],
+            "happened_at": happened_at.isoformat(),
+            "matches": [
+                {
+                    "id": tx.id,
+                    "amount": tx.amount_cents / 100.0,
+                    "category": category,
+                    "note": tx.note,
+                    "happened_at": tx.happened_at.isoformat(),
+                }
+                for tx, category, _ in rows
+            ],
+        },
+    }
+
+
 @app.post("/transactions")
 def create_transaction(
     payload: TransactionCreate,
@@ -876,6 +920,12 @@ def create_transaction(
 
     happened_at = payload.happened_at or datetime.utcnow()
     amount_cents = transaction_amount_to_cents(payload.amount)
+    if tx_type == "expense" and payload.check_duplicates:
+        begin_transaction_mutation(session)
+        owner_id = None if auth.has_scope(SCOPE_FAMILY_READ) else user.telegram_id
+        warning = find_expense_duplicates(session, amount_cents, happened_at, owner_id=owner_id)
+        if warning:
+            return warning
     cat = get_or_create_category(session, payload.category_name.strip(), tx_type)
 
     tx = Transaction(
@@ -1395,9 +1445,14 @@ def admin_create_transaction(payload: AdminTransactionCreate, session: Session =
     if tx_type not in ("income", "expense"):
         raise HTTPException(status_code=400, detail="Invalid type")
 
-    cat = get_or_create_category(session, payload.category_name.strip(), tx_type)
     happened_at = payload.happened_at or datetime.utcnow()
-    amount_cents = int(round(payload.amount * 100))
+    amount_cents = amount_to_cents(payload.amount)
+    if tx_type == "expense" and payload.check_duplicates:
+        begin_transaction_mutation(session)
+        warning = find_expense_duplicates(session, amount_cents, happened_at)
+        if warning:
+            return warning
+    cat = get_or_create_category(session, payload.category_name.strip(), tx_type)
 
     tx = Transaction(
         type=tx_type,

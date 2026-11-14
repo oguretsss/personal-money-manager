@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
@@ -613,6 +614,98 @@ class ApiAuthenticationTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 403)
+
+    def test_expense_duplicate_warning_counts_same_day_and_amount_across_categories(self):
+        self.add_user(1009)
+        self.add_user(1010)
+        path = "/admin/transactions"
+        headers = self.bearer(ADMIN_TOKEN)
+        expense = {
+            "type": "expense", "amount": 10, "category_name": "Groceries",
+            "created_by_telegram_id": 1009, "note": "REWE",
+        }
+        for timestamp in ("00:00:00", "10:00:00", "19:00:00", "23:59:59.999999"):
+            response = self.client.post(path, headers=headers, json={
+                **expense, "happened_at": f"2026-11-10T{timestamp}",
+            })
+            self.assertTrue(response.json()["ok"])
+        for changes in (
+            {"happened_at": "2026-11-11T00:00:00"},
+            {"amount": 10.01},
+            {"type": "income", "category_name": "Refund", "check_duplicates": True},
+        ):
+            response = self.client.post(path, headers=headers, json={
+                **expense, "happened_at": "2026-11-10T12:00:00", **changes,
+            })
+            self.assertTrue(response.json()["ok"])
+
+        payload = {
+            **expense, "happened_at": "2026-11-10T12:00:00", "category_name": "Household",
+            "created_by_telegram_id": 1010, "check_duplicates": True,
+        }
+        response = self.client.post(path, headers=headers, json=payload)
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertFalse(result["ok"])
+        warning = result["possible_duplicates"]
+        self.assertEqual(warning["count"], 4)
+        self.assertEqual(len(warning["matches"]), 3)
+        self.assertEqual(warning["matches"][0]["happened_at"], "2026-11-10T23:59:59.999999")
+        self.assertEqual(warning["matches"][0]["category"], "Groceries")
+        self.assertEqual(warning["matches"][0]["note"], "REWE")
+        self.assertEqual(warning["matches"][0]["amount"], 10)
+        with Session(engine) as session:
+            self.assertIsNone(session.exec(select(Category).where(Category.name == "Household")).first())
+            self.assertEqual(len(session.exec(select(Transaction)).all()), 7)
+
+        response = self.client.post(path, headers=headers, json={**payload, "check_duplicates": False})
+        self.assertTrue(response.json()["ok"])
+        with Session(engine) as session:
+            self.assertEqual(len(session.exec(select(Transaction)).all()), 8)
+
+    def test_duplicate_warnings_respect_family_read_scope(self):
+        self.add_user(1009)
+        self.add_user(1010)
+        _, personal_token = self.create_token(
+            name="write-only", principal_type="user", telegram_id=1010,
+            scopes={SCOPE_TRANSACTIONS_WRITE},
+        )
+        payload = {
+            "type": "expense", "amount": 10, "category_name": "Groceries",
+            "happened_at": "2026-11-10T12:00:00", "check_duplicates": True,
+        }
+        bot_response = self.client.post("/transactions", params={"telegram_id": 1009},
+                                        headers=self.bearer(BOT_TOKEN), json=payload)
+        self.assertTrue(bot_response.json()["ok"])
+        personal_response = self.client.post("/transactions", headers=self.bearer(personal_token), json=payload)
+        self.assertTrue(personal_response.json()["ok"])
+
+        personal_warning = self.client.post("/transactions", headers=self.bearer(personal_token), json=payload)
+        personal_matches = personal_warning.json()["possible_duplicates"]["matches"]
+        self.assertEqual([match["id"] for match in personal_matches], [personal_response.json()["id"]])
+        bot_warning = self.client.post("/transactions", params={"telegram_id": 1009},
+                                       headers=self.bearer(BOT_TOKEN), json=payload)
+        self.assertEqual(bot_warning.json()["possible_duplicates"]["count"], 2)
+
+    def test_concurrent_expense_checks_save_once_and_warn_once(self):
+        self.add_user(1009)
+        payload = {
+            "type": "expense", "amount": 10, "category_name": "Groceries",
+            "created_by_telegram_id": 1009, "happened_at": "2026-11-10T12:00:00",
+            "check_duplicates": True,
+        }
+
+        def submit():
+            response = self.client.post("/admin/transactions", headers=self.bearer(ADMIN_TOKEN), json=payload)
+            return response.json()
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first, second = executor.submit(submit), executor.submit(submit)
+            results = [first.result(), second.result()]
+        saved, warning = sorted(results, key=lambda result: result["ok"], reverse=True)
+        self.assertTrue(saved["ok"])
+        self.assertFalse(warning["ok"])
+        self.assertEqual(warning["possible_duplicates"]["matches"][0]["id"], saved["id"])
 
     def test_category_limit_progress_and_transaction_thresholds(self):
         self.add_user(1009)

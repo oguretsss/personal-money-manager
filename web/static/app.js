@@ -4,6 +4,12 @@ function todayDate() {
     return new Date().toISOString().slice(0, 10);
 }
 
+function localTodayDate() {
+    const now = new Date();
+    const localTime = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+    return localTime.toISOString().slice(0, 10);
+}
+
 function parseAmount(value) {
     if (typeof value === 'number') return value;
     return parseFloat(String(value).replace(',', '.'));
@@ -27,7 +33,7 @@ function projectedLimitFor(limits, form) {
 
     const limit = (limits || []).find(item => item.category === form.category_name);
     if (!limit) return null;
-    const transactionMonth = String(form.happened_at || todayDate()).slice(0, 7);
+    const transactionMonth = String(form.happened_at || localTodayDate()).slice(0, 7);
     if (transactionMonth !== limit.period) return null;
 
     const projectedSpent = Number(limit.spent || 0) + amount;
@@ -65,6 +71,46 @@ function announceLimitStatus(result) {
         : (status.status === 'caution' ? 'caution' : 'warning');
     Alpine.store('toast').add(status.message, toastType);
     return true;
+}
+
+function duplicateWarningTitle(warning) {
+    const count = warning.count;
+    return `Possible duplicate expense. Found ${count} ${count === 1 ? 'match' : 'matches'}.`;
+}
+
+function duplicateMatchText(match) {
+    const date = match.happened_at.slice(0, 10).split('-').reverse().join('.');
+    const details = [match.category || 'Uncategorized', match.note];
+    return `${formatMoney(match.amount)}, ${date} · ${details.filter(Boolean).join(' · ')}`;
+}
+
+function duplicateWarningDetails(warning) {
+    const details = warning.matches.map(duplicateMatchText);
+    const remaining = warning.count - details.length;
+    if (remaining > 0) details.push(`+ ${remaining} more`);
+    return details.join('\n');
+}
+
+function transactionFormPayload(form, warning) {
+    const date = form.happened_at || (form.type === 'expense' ? localTodayDate() : '');
+    return {
+        type: form.type,
+        amount: parseAmount(form.amount),
+        category_name: form.category_name,
+        created_by_telegram_id: parseInt(form.created_by_telegram_id),
+        happened_at: warning?.happened_at || (date ? `${date}T00:00:00` : undefined),
+        note: form.note || '',
+        check_duplicates: form.type === 'expense' && !warning,
+    };
+}
+
+async function postTransaction(payload) {
+    try {
+        return await apiCall('POST', '/api/transactions', payload);
+    } catch {
+        Alpine.store('toast').add('Could not reach the server. Check the transaction list before retrying.', 'error');
+        return null;
+    }
 }
 
 function parseBankAmount(value) {
@@ -273,6 +319,7 @@ function fabExpense() {
     return {
         showModal: false,
         loading: false,
+        duplicateWarning: null,
         categories: [],
         users: [],
         limits: [],
@@ -281,12 +328,14 @@ function fabExpense() {
             amount: '',
             category_name: '',
             created_by_telegram_id: '',
-            happened_at: todayDate(),
+            happened_at: localTodayDate(),
             note: '',
         },
 
         async openModal() {
-            this.form.happened_at = todayDate();
+            if (this.loading) return;
+            this.duplicateWarning = null;
+            this.form.happened_at = localTodayDate();
             this.form.amount = '';
             this.form.category_name = '';
             this.form.note = '';
@@ -305,24 +354,20 @@ function fabExpense() {
         },
 
         async submit() {
+            if (this.loading) return;
             if (!this.form.amount || !this.form.category_name) {
                 Alpine.store('toast').add('Please fill amount and category', 'error');
                 return;
             }
             this.loading = true;
-            const payload = {
-                type: this.form.type,
-                amount: parseAmount(this.form.amount),
-                category_name: this.form.category_name,
-                created_by_telegram_id: parseInt(this.form.created_by_telegram_id),
-                note: this.form.note || '',
-            };
-            if (this.form.happened_at) {
-                payload.happened_at = this.form.happened_at + 'T00:00:00';
-            }
-            const result = await apiCall('POST', '/api/transactions', payload);
+            const result = await postTransaction(transactionFormPayload(this.form, this.duplicateWarning));
             this.loading = false;
-            if (result) {
+            if (result?.possible_duplicates) {
+                this.duplicateWarning = result.possible_duplicates;
+                return;
+            }
+            if (result?.ok) {
+                this.duplicateWarning = null;
                 Alpine.store('toast').add('Transaction created', 'success');
                 const hasLimitAlert = announceLimitStatus(result);
                 this.showModal = false;
@@ -425,12 +470,13 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
 
         // Add modal
         showAdd: false,
+        duplicateWarning: null,
         addForm: {
             type: 'expense',
             amount: '',
             category_name: '',
             created_by_telegram_id: '',
-            happened_at: todayDate(),
+            happened_at: localTodayDate(),
             note: '',
         },
 
@@ -766,7 +812,9 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         },
 
         openAdd() {
-            this.addForm.happened_at = todayDate();
+            if (this.loading) return;
+            this.duplicateWarning = null;
+            this.addForm.happened_at = localTodayDate();
             this.addForm.amount = '';
             this.addForm.category_name = '';
             this.addForm.note = '';
@@ -791,6 +839,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         },
 
         closeCsvImport() {
+            if (this.loading) return;
             this.showCsvImport = false;
             this.csvDragOver = false;
         },
@@ -817,8 +866,23 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             return this.csvRows.filter(row => row.selected && !row.imported).length;
         },
 
+        csvRowsNeedingConfirmation() {
+            return this.csvRows.filter(row => row.selected && row.duplicateWarning && !row.allowDuplicate);
+        },
+
+        readyCsvRows() {
+            return this.csvRows.filter(row =>
+                row.selected && !row.imported && (!row.duplicateWarning || row.allowDuplicate),
+            );
+        },
+
+        clearCsvDuplicateWarning(row) {
+            row.duplicateWarning = null;
+            row.allowDuplicate = false;
+        },
+
         missingCsvCategoryCount() {
-            return this.csvRows.filter(row => row.selected && !row.imported && !row.category_name).length;
+            return this.readyCsvRows().filter(row => !row.category_name).length;
         },
 
         handleCsvDrop(event) {
@@ -828,7 +892,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         },
 
         async handleCsvFile(file) {
-            if (!file) return;
+            if (!file || this.loading) return;
             this.csvFileName = file.name;
             this.csvRows = [];
             this.csvErrors = [];
@@ -887,6 +951,8 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
                         id: `${Date.now()}-${idx}`,
                         selected: true,
                         imported: false,
+                        duplicateWarning: null,
+                        allowDuplicate: false,
                         happened_at: happenedAt,
                         amount: Math.abs(amount).toFixed(2),
                         category_name: '',
@@ -920,7 +986,8 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         },
 
         async submitCsvImport() {
-            const rows = this.csvRows.filter(row => row.selected && !row.imported);
+            if (this.loading) return;
+            const rows = this.readyCsvRows();
             if (!rows.length) {
                 Alpine.store('toast').add('Select at least one expense to import', 'error');
                 return;
@@ -942,11 +1009,16 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
                     created_by_telegram_id: parseInt(this.csvImportUserId),
                     happened_at: row.happened_at,
                     note: row.note || '',
+                    check_duplicates: !row.allowDuplicate,
                 };
-                const result = await apiCall('POST', '/api/transactions', payload);
-                if (result) {
+                const result = await postTransaction(payload);
+                if (result?.possible_duplicates) {
+                    row.duplicateWarning = result.possible_duplicates;
+                    row.allowDuplicate = false;
+                } else if (result?.ok) {
                     row.imported = true;
                     row.selected = false;
+                    this.clearCsvDuplicateWarning(row);
                     created++;
                 } else {
                     failed++;
@@ -956,35 +1028,33 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
 
             if (created && !failed) {
                 Alpine.store('toast').add(`${created} expense(s) imported`, 'success');
-                this.showCsvImport = false;
-                await this.transactionsChanged();
-                return;
+                if (!this.csvRowsNeedingConfirmation().length) {
+                    this.showCsvImport = false;
+                }
+            }
+            if (created && failed) {
+                Alpine.store('toast').add(`${created} imported, ${failed} failed`, 'info');
             }
             if (created) {
-                Alpine.store('toast').add(`${created} imported, ${failed} failed`, 'info');
                 await this.transactionsChanged();
             }
         },
 
         async submitAdd() {
+            if (this.loading) return;
             if (!this.addForm.amount || !this.addForm.category_name) {
                 Alpine.store('toast').add('Please fill amount and category', 'error');
                 return;
             }
             this.loading = true;
-            const payload = {
-                type: this.addForm.type,
-                amount: parseAmount(this.addForm.amount),
-                category_name: this.addForm.category_name,
-                created_by_telegram_id: parseInt(this.addForm.created_by_telegram_id),
-                note: this.addForm.note || '',
-            };
-            if (this.addForm.happened_at) {
-                payload.happened_at = this.addForm.happened_at + 'T00:00:00';
-            }
-            const result = await apiCall('POST', '/api/transactions', payload);
+            const result = await postTransaction(transactionFormPayload(this.addForm, this.duplicateWarning));
             this.loading = false;
-            if (result) {
+            if (result?.possible_duplicates) {
+                this.duplicateWarning = result.possible_duplicates;
+                return;
+            }
+            if (result?.ok) {
+                this.duplicateWarning = null;
                 Alpine.store('toast').add('Transaction created', 'success');
                 announceLimitStatus(result);
                 this.showAdd = false;

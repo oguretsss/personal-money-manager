@@ -6,6 +6,7 @@ class AddTx(StatesGroup):
     entering_amount = State()
     entering_category = State()
     entering_note = State()
+    confirming_duplicate = State()
 
 class SpaceTx(StatesGroup):
     choosing_direction = State()

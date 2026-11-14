@@ -504,6 +504,19 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
     font-size: 0.85rem;
 }
 .limit-notice strong { color: var(--limit-color); }
+.duplicate-warning {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0.45rem 0;
+    padding: 0.65rem 0.8rem;
+    border-left: 3px solid #fdd835;
+    border-radius: 6px;
+    background: rgba(253, 216, 53, 0.09);
+    font-size: 0.85rem;
+    overflow-wrap: anywhere;
+    white-space: pre-line;
+}
+.duplicate-warning strong { color: #fff3b0; }
 .muted { color: #90a4ae; }
 
 .csv-drop-zone {
@@ -728,10 +741,15 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
         overflow: visible;
     }
     .responsive-table.import-table input:not([type="checkbox"]),
+    .responsive-table.import-table .import-note-cell > div,
     .responsive-table.import-table select {
         flex: 0 1 65%;
         width: 65%;
         max-width: 65%;
+    }
+    .responsive-table.import-table .import-note-cell input:not([type="checkbox"]) {
+        width: 100%;
+        max-width: 100%;
     }
 }
 

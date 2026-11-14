@@ -207,6 +207,75 @@ test('refresh keeps a visible surviving row at the same vertical position', asyn
     assert.deepEqual(scrolls, [60]);
 });
 
+const duplicateWarning = {
+    count: 1,
+    happened_at: '2026-11-10T00:00:00',
+    matches: [{ id: 1, amount: 10, happened_at: '2026-11-10T12:00:00', category: 'Groceries', note: 'REWE' }],
+};
+
+test('expense forms wait for confirmation, preserve the date and refresh only after saving', async () => {
+    for (const quickExpense of [false, true]) {
+        const { page, context } = loadPage();
+        const component = quickExpense ? context.fabExpense() : page;
+        const form = quickExpense ? component.form : component.addForm;
+        const submit = () => quickExpense ? component.submit() : component.submitAdd();
+        const isOpen = () => quickExpense ? component.showModal : component.showAdd;
+        const calls = [];
+        let refreshes = 0;
+        context.window.dispatchEvent = () => { refreshes++; return false; };
+        page.transactionsChanged = async () => { refreshes++; };
+        if (quickExpense) component.showModal = true;
+        else page.openAdd();
+        Object.assign(form, { amount: '10,00', category_name: 'Cafe', created_by_telegram_id: 123, happened_at: '' });
+        context.apiCall = async (_method, _url, payload) => {
+            calls.push(payload);
+            return payload.check_duplicates ? { ok: false, possible_duplicates: duplicateWarning } : { ok: true, id: 2 };
+        };
+
+        await submit();
+        assert.equal(component.duplicateWarning, duplicateWarning);
+        assert.equal(refreshes, 0);
+        assert.equal(isOpen(), true);
+        assert.match(context.duplicateWarningDetails(duplicateWarning), /€10\.00, 10\.11\.2026 · Groceries · REWE/);
+        await submit();
+        assert.deepEqual(calls.map(payload => payload.check_duplicates), [true, false]);
+        assert.equal(calls[1].happened_at, duplicateWarning.happened_at);
+        assert.equal(refreshes, 1);
+        assert.equal(isOpen(), false);
+    }
+});
+
+test('CSV saves clear rows and waits for individual duplicate confirmation before saving other rows', async () => {
+    const { page, context } = loadPage();
+    page.openCsvImport();
+    const row = { selected: true, imported: false, category_name: 'Cafe', happened_at: '2026-11-10T00:00' };
+    page.csvRows = [{ ...row, amount: '10' }, { ...row, amount: '20' }];
+    const calls = [];
+    let refreshes = 0;
+    page.transactionsChanged = async () => { refreshes++; };
+    context.apiCall = async (_method, _url, payload) => {
+        calls.push([payload.amount, payload.check_duplicates]);
+        return payload.amount === 10 && payload.check_duplicates
+            ? { ok: false, possible_duplicates: duplicateWarning }
+            : { ok: true };
+    };
+
+    await page.submitCsvImport();
+    assert.equal(page.showCsvImport, true);
+    assert.equal(page.csvRows[0].duplicateWarning, duplicateWarning);
+    assert.equal(page.csvRows[0].imported, false);
+    assert.equal(page.csvRows[1].imported, true);
+    assert.equal(page.readyCsvRows().length, 0);
+    assert.equal(refreshes, 1);
+
+    page.csvRows[0].allowDuplicate = true;
+    await page.submitCsvImport();
+    assert.deepEqual(calls, [[10, true], [20, true], [10, false]]);
+    assert.equal(page.csvRows[0].imported, true);
+    assert.equal(page.showCsvImport, false);
+    assert.equal(refreshes, 2);
+});
+
 test('add, edit, sort and undo sort update the list without reloading the page', async () => {
     for (const action of ['submitAdd', 'submitEdit', 'submitIncomeSort', 'doUndoIncomeSort']) {
         const { page, context } = loadPage();

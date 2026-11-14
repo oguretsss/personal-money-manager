@@ -6,6 +6,7 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -22,7 +23,7 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is missing")
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(events_isolation=SimpleEventIsolation())
 api = ApiClient()
 
 def try_parse_amount(text: str) -> float | None:
@@ -67,6 +68,11 @@ NOTE_KB = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="⏭ Skip note")],
     ],
+    resize_keyboard=True,
+)
+
+DUPLICATE_KB = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="Add anyway"), KeyboardButton(text="⬅️ Cancel")]],
     resize_keyboard=True,
 )
 
@@ -341,15 +347,53 @@ async def enter_note(message: Message, state: FSMContext):
         "category_name": data["category_name"],
         "note": note,
     }
+    if data["type"] == "expense":
+        payload["happened_at"] = datetime.now().isoformat()
+        payload["check_duplicates"] = True
+    await save_transaction(message, state, payload)
 
+
+async def save_transaction(message: Message, state: FSMContext, payload: dict):
     try:
-        res = await api.create_transaction(message.from_user.id, payload)
+        result = await api.create_transaction(message.from_user.id, payload)
     except Exception:
         await message.answer("Failed to add transaction.")
         return
 
+    warning = result.get("possible_duplicates")
+    if warning:
+        confirmed_payload = {**payload, "happened_at": warning["happened_at"], "check_duplicates": False}
+        await state.update_data(confirmed_payload=confirmed_payload)
+        await state.set_state(AddTx.confirming_duplicate)
+        count = warning["count"]
+        lines = [f"⚠️ Possible duplicate expense. Found {count} {'match' if count == 1 else 'matches'}."]
+        for match in warning["matches"]:
+            day = datetime.fromisoformat(match["happened_at"]).strftime("%d.%m.%Y")
+            category = (match["category"] or "Uncategorized")[:100]
+            details = f"{match['amount']:.2f} EUR, {day} · {category}"
+            if match["note"]:
+                details += f" · {match['note'][:160]}"
+            lines.append(details)
+        remaining = count - len(warning["matches"])
+        if remaining:
+            lines.append(f"+ {remaining} more")
+        await message.answer("\n".join(lines), reply_markup=DUPLICATE_KB)
+        return
+
     await state.clear()
     await message.answer("Saved ✅", reply_markup=MAIN_KB)
+
+
+@dp.message(AddTx.confirming_duplicate)
+async def confirm_duplicate(message: Message, state: FSMContext):
+    if message.text == "⬅️ Cancel":
+        await state.clear()
+        await message.answer("Cancelled", reply_markup=MAIN_KB)
+    elif message.text == "Add anyway":
+        data = await state.get_data()
+        await save_transaction(message, state, data["confirmed_payload"])
+    else:
+        await message.answer("Choose Add anyway or Cancel.", reply_markup=DUPLICATE_KB)
 
 
 @dp.message(F.text == "🏦 Spaces")

@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}MoneyManage Admin{% endblock %}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
-    <link rel="stylesheet" href="/static/app.css?v=20261103-2">
-    <script src="/static/app.js?v=20261114-1"></script>
+    <link rel="stylesheet" href="/static/app.css?v=20261114-2">
+    <script src="/static/app.js?v=20261114-2"></script>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
 </head>
 <body>
@@ -47,60 +47,68 @@
     <div x-data="fabExpense()" x-cloak>
         <button class="fab" @click="openModal()" title="Quick expense">+</button>
 
-        <div x-show="showModal" x-cloak class="fab-overlay" @click.self="showModal = false">
+        <div x-show="showModal" x-cloak class="fab-overlay" @click.self="if (!loading) showModal = false">
                 <div class="fab-modal">
                     <h3>Quick Expense</h3>
-                    <div class="form-row">
-                        <label>Type</label>
-                        <select x-model="form.type" @change="form.category_name = ''">
-                            <option value="expense">Expense</option>
-                            <option value="income">Income</option>
-                        </select>
-                    </div>
-                    <div class="grid-2">
+                    <fieldset :disabled="loading" @input="duplicateWarning = null" @change="duplicateWarning = null">
                         <div class="form-row">
-                            <label>Amount</label>
-                            <input type="text" inputmode="decimal" x-model="form.amount"
-                                   placeholder="0.00">
-                        </div>
-                        <div class="form-row">
-                            <label>Category</label>
-                            <select x-model="form.category_name">
-                                <option value="">Select...</option>
-                                <template x-for="c in categories.filter(c => c.type === form.type)" :key="c.id">
-                                    <option :value="c.name" x-text="c.name"></option>
-                                </template>
+                            <label>Type</label>
+                            <select x-model="form.type" @change="form.category_name = ''">
+                                <option value="expense">Expense</option>
+                                <option value="income">Income</option>
                             </select>
                         </div>
-                    </div>
-                    <div class="grid-2">
-                        <div class="form-row">
-                            <label>User</label>
-                            <select x-model="form.created_by_telegram_id">
-                                <template x-for="u in users" :key="u.id">
-                                    <option :value="u.telegram_id" x-text="u.name"></option>
-                                </template>
-                            </select>
+                        <div class="grid-2">
+                            <div class="form-row">
+                                <label>Amount</label>
+                                <input type="text" inputmode="decimal" x-model="form.amount"
+                                       placeholder="0.00">
+                            </div>
+                            <div class="form-row">
+                                <label>Category</label>
+                                <select x-model="form.category_name">
+                                    <option value="">Select...</option>
+                                    <template x-for="c in categories.filter(c => c.type === form.type)" :key="c.id">
+                                        <option :value="c.name" x-text="c.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="grid-2">
+                            <div class="form-row">
+                                <label>User</label>
+                                <select x-model="form.created_by_telegram_id">
+                                    <template x-for="u in users" :key="u.id">
+                                        <option :value="u.telegram_id" x-text="u.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+                            <div class="form-row">
+                                <label>Date</label>
+                                <input type="date" x-model="form.happened_at">
+                            </div>
                         </div>
                         <div class="form-row">
-                            <label>Date</label>
-                            <input type="date" x-model="form.happened_at">
+                            <label>Note</label>
+                            <input type="text" x-model="form.note" placeholder="Optional">
                         </div>
-                    </div>
-                    <div class="form-row">
-                        <label>Note</label>
-                        <input type="text" x-model="form.note" placeholder="Optional">
-                    </div>
+                    </fieldset>
                     <template x-if="projectedLimit()">
                         <div class="limit-notice" :class="`limit-${projectedLimit().status}`">
                             <strong x-text="projectedLimit().title"></strong>
                             <span x-text="projectedLimit().message"></span>
                         </div>
                     </template>
+                    <template x-if="duplicateWarning">
+                        <div class="duplicate-warning" role="alert">
+                            <strong x-text="duplicateWarningTitle(duplicateWarning)"></strong>
+                            <div x-text="duplicateWarningDetails(duplicateWarning)"></div>
+                        </div>
+                    </template>
                     <div class="form-actions">
-                        <button @click="showModal = false" class="secondary">Cancel</button>
+                        <button @click="showModal = false" :disabled="loading" class="secondary">Cancel</button>
                         <button @click="submit()" :disabled="loading"
-                                x-text="loading ? 'Saving...' : 'Add'"></button>
+                                x-text="loading ? 'Saving...' : (duplicateWarning ? 'Add anyway' : 'Add')"></button>
                     </div>
                 </div>
             </div>

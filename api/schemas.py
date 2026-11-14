@@ -9,6 +9,7 @@ class TransactionCreate(BaseModel):
     category_name: str
     happened_at: datetime | None = None
     note: str = ""
+    check_duplicates: bool = False
 
 class SummaryQuery(BaseModel):
     start: datetime
@@ -64,6 +65,7 @@ class AdminTransactionCreate(BaseModel):
     created_by_telegram_id: int
     happened_at: datetime | None = None
     note: str = ""
+    check_duplicates: bool = False
 
 
 class SubscriptionCreate(BaseModel):
