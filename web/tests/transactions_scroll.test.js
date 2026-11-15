@@ -245,11 +245,14 @@ test('expense forms wait for confirmation, preserve the date and refresh only af
     }
 });
 
-test('CSV saves clear rows and waits for individual duplicate confirmation before saving other rows', async () => {
+function csvRow(id, amount, selected = true) {
+    return { id, amount, selected, status: 'pending', category_name: 'Cafe', happened_at: '2026-11-10T00:00' };
+}
+
+test('CSV review shows only potential duplicates and imports exactly the checked rows', async () => {
     const { page, context } = loadPage();
     page.openCsvImport();
-    const row = { selected: true, imported: false, category_name: 'Cafe', happened_at: '2026-11-10T00:00' };
-    page.csvRows = [{ ...row, amount: '10' }, { ...row, amount: '20' }];
+    page.csvRows = [csvRow(1, '10'), csvRow(2, '20'), csvRow(3, '10'), csvRow(4, '30', false)];
     const calls = [];
     let refreshes = 0;
     page.transactionsChanged = async () => { refreshes++; };
@@ -262,18 +265,83 @@ test('CSV saves clear rows and waits for individual duplicate confirmation befor
 
     await page.submitCsvImport();
     assert.equal(page.showCsvImport, true);
+    assert.equal(page.csvStep, 'review');
+    assert.equal(page.csvResult.imported, 1);
+    assert.equal(page.csvResult.total, 3);
+    assert.deepEqual(Array.from(page.csvDuplicates, row => row.id), [1, 3]);
+    assert.equal(page.csvSelectedDuplicates.length, 0);
     assert.equal(page.csvRows[0].duplicateWarning, duplicateWarning);
-    assert.equal(page.csvRows[0].imported, false);
-    assert.equal(page.csvRows[1].imported, true);
-    assert.equal(page.readyCsvRows().length, 0);
     assert.equal(refreshes, 1);
 
     page.csvRows[0].allowDuplicate = true;
-    await page.submitCsvImport();
-    assert.deepEqual(calls, [[10, true], [20, true], [10, false]]);
-    assert.equal(page.csvRows[0].imported, true);
-    assert.equal(page.showCsvImport, false);
+    assert.equal(page.csvDuplicateImportLabel, 'Import 1 transaction');
+    await page.importSelectedCsvDuplicates();
+    assert.deepEqual(calls, [[10, true], [20, true], [10, true], [10, false]]);
+    assert.equal(page.csvStep, 'complete');
+    assert.equal(page.csvResult.imported, 2);
+    assert.equal(page.csvResult.skipped, 1);
+    assert.equal(page.csvResult.total, 3);
     assert.equal(refreshes, 2);
+    page.closeCsvImport();
+    page.openCsvImport();
+    assert.equal(page.csvStep, 'prepare');
+    assert.equal(page.csvRows.length, 0);
+});
+
+test('CSV duplicate review can skip every match without issuing another write', async () => {
+    const { page, context } = loadPage();
+    page.openCsvImport();
+    page.csvRows = [csvRow(1, '10'), csvRow(2, '10')];
+    let calls = 0;
+    context.apiCall = async () => { calls++; return { possible_duplicates: duplicateWarning }; };
+
+    await page.submitCsvImport();
+    assert.equal(page.csvStep, 'review');
+    assert.equal(page.csvResult.imported, 0);
+    await page.importSelectedCsvDuplicates();
+    page.csvRows[1].allowDuplicate = true;
+    page.finishCsvDuplicateReview();
+    assert.equal(calls, 2);
+    assert.equal(page.csvStep, 'complete');
+    assert.equal(page.csvResult.skipped, 2);
+});
+
+test('CSV retries only failed duplicate confirmations and preserves ordinary failures for retry', async () => {
+    const { page, context } = loadPage();
+    page.openCsvImport();
+    page.csvRows = [csvRow(1, '10'), csvRow(2, '11'), csvRow(3, '20'), csvRow(4, '30')];
+    const calls = [];
+    page.transactionsChanged = async () => {};
+    context.apiCall = async (_method, _url, payload) => {
+        calls.push([payload.amount, payload.check_duplicates]);
+        if (payload.check_duplicates && payload.amount < 20) return { possible_duplicates: duplicateWarning };
+        if (payload.amount === 20 && calls.length === 3) return null;
+        if (payload.amount === 11 && calls.length === 6) return null;
+        return { ok: true };
+    };
+
+    await page.submitCsvImport();
+    assert.equal(page.csvStep, 'review');
+    assert.equal(page.csvResult.failed, 1);
+    page.csvDuplicates.forEach(row => { row.allowDuplicate = true; });
+    assert.equal(page.csvDuplicateImportLabel, 'Import 2 transactions');
+    await page.importSelectedCsvDuplicates();
+    assert.equal(page.csvStep, 'review');
+    assert.equal(page.csvResult.imported, 2);
+    assert.deepEqual(Array.from(page.csvSelectedDuplicates, row => row.id), [2]);
+    assert.equal(page.csvSelectedDuplicates[0].reviewFailed, true);
+
+    await page.importSelectedCsvDuplicates();
+    assert.equal(page.csvStep, 'complete');
+    assert.equal(page.csvResult.imported, 3);
+    page.retryCsvFailures();
+    assert.equal(page.csvStep, 'prepare');
+    assert.deepEqual(Array.from(page.csvSelectedRows, row => row.id), [3]);
+    await page.submitCsvImport();
+    assert.equal(page.csvStep, 'complete');
+    assert.equal(page.csvResult.imported, 4);
+    assert.equal(page.csvResult.failed, 0);
+    assert.deepEqual(calls, [[10, true], [11, true], [20, true], [30, true], [10, false], [11, false], [11, false], [20, true]]);
 });
 
 test('add, edit, sort and undo sort update the list without reloading the page', async () => {
@@ -299,14 +367,15 @@ test('partial CSV success refreshes the list while leaving failed rows available
     page.transactionsChanged = async () => { refreshed++; };
     page.csvImportUserId = 123;
     page.showCsvImport = true;
-    page.csvRows = [1, 2].map(id => ({ id, selected: true, amount: 5, category_name: 'Cafe', happened_at: '2026-11-03' }));
+    page.csvRows = [csvRow(1, '5'), csvRow(2, '5')];
     let calls = 0;
     context.apiCall = async () => (++calls === 1 ? { ok: true } : null);
     await page.submitCsvImport();
     assert.equal(refreshed, 1);
     assert.equal(page.showCsvImport, true);
-    assert.equal(page.csvRows[0].imported, true);
-    assert.equal(page.csvRows[1].selected, true);
+    assert.equal(page.csvStep, 'prepare');
+    assert.equal(page.csvResult.imported, 1);
+    assert.deepEqual(Array.from(page.csvSelectedRows, row => row.id), [2]);
 });
 
 test('quick expense dispatches a refresh event and does not reload when Transactions handles it', async () => {

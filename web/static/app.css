@@ -604,6 +604,55 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
 .import-table .row-muted { opacity: 0.58; }
 .import-table .row-error { background: rgba(183, 28, 28, 0.16); }
 
+.csv-review-dialog {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    max-width: 820px;
+    max-height: 90dvh;
+    overflow: hidden;
+}
+.csv-review-content { padding: 1.25rem 1.5rem 0.85rem; }
+.csv-review-list { min-height: 0; overflow-y: auto; padding: 0 1.5rem 1rem; }
+.csv-review-header h3 { margin-bottom: 0.2rem; font-size: 1.25rem; }
+.csv-review-header p { overflow-wrap: anywhere; color: var(--pico-muted-color); }
+.csv-result {
+    display: grid;
+    gap: 0.2rem;
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 8px;
+    background: var(--pico-card-sectioning-background-color);
+}
+.csv-result-saved { background: #192823; border-color: #35584a; }
+.csv-result-saved strong { color: #a5e6c3; }
+.csv-result-review { color: #f5d48b; }
+.csv-result-error { color: #ffab91; }
+.csv-review-table { margin: 0; table-layout: fixed; }
+.csv-review-table th { font-size: 0.85rem; color: var(--pico-muted-color); }
+.csv-review-table tbody td { vertical-align: middle; overflow-wrap: anywhere; }
+.csv-review-table th:last-child, .csv-review-table .csv-review-choice { width: 8.5rem; text-align: center; }
+.csv-review-table .csv-review-selected td { background: #1c2c3b; }
+.csv-review-table .csv-review-choice label { min-width: 44px; min-height: 44px; justify-content: center; }
+.csv-review-choice label span { display: none; }
+.csv-review-meta { font-size: 0.85rem; color: var(--pico-muted-color); }
+.csv-review-choice .csv-result-error { font-size: 0.8rem; }
+.csv-matches { display: grid; gap: 0.4rem; }
+.csv-review-footer {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.65rem;
+    padding: 0.85rem 1.5rem;
+    border-top: 1px solid var(--pico-muted-border-color);
+    background: var(--pico-card-sectioning-background-color);
+}
+.csv-review-selection { display: grid; }
+.csv-review-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.csv-review-actions button { margin: 0; }
+.csv-complete-footer { justify-content: flex-end; }
+
 /* ── Subscriptions ─────────────────────────────────────────────────── */
 
 .dashboard-heading,
@@ -741,15 +790,23 @@ table form button { margin: 0; padding: 0.25rem 0.5rem; font-size: 0.85rem; }
         overflow: visible;
     }
     .responsive-table.import-table input:not([type="checkbox"]),
-    .responsive-table.import-table .import-note-cell > div,
     .responsive-table.import-table select {
         flex: 0 1 65%;
         width: 65%;
         max-width: 65%;
     }
-    .responsive-table.import-table .import-note-cell input:not([type="checkbox"]) {
-        width: 100%;
-        max-width: 100%;
+    .csv-review-content, .csv-review-footer { padding: 0.85rem 1rem; }
+    .csv-review-list { padding: 0 1rem 0.85rem; }
+    .csv-review-table td { display: grid; gap: 0.15rem; }
+    .csv-review-table .csv-review-choice { width: auto; text-align: left; }
+    .csv-review-table .csv-review-choice::before { display: none; }
+    .csv-review-table .csv-review-choice label { justify-content: flex-start; }
+    .csv-review-choice label span { display: inline; }
+    .csv-review-table .csv-review-selected { background: #1c2c3b; }
+    .csv-review-footer { justify-content: flex-end; }
+    .csv-review-selection { flex: 1 0 100%; }
+    .csv-review-actions button {
+        white-space: normal;
     }
 }
 

@@ -84,6 +84,11 @@ function duplicateMatchText(match) {
     return `${formatMoney(match.amount)}, ${date} · ${details.filter(Boolean).join(' · ')}`;
 }
 
+function csvTransactionDetails(transaction, category) {
+    const date = transaction.happened_at.slice(0, 10).split('-').reverse().join('.');
+    return `${date} · ${category || 'Uncategorized'} · ${formatMoney(parseAmount(transaction.amount))}`;
+}
+
 function duplicateWarningDetails(warning) {
     const details = warning.matches.map(duplicateMatchText);
     const remaining = warning.count - details.length;
@@ -467,6 +472,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         csvSkippedInvalidCount: 0,
         csvDragOver: false,
         csvImportUserId: '',
+        csvStep: 'prepare',
 
         // Add modal
         showAdd: false,
@@ -830,59 +836,88 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         },
 
         openCsvImport() {
-            this.csvErrors = [];
+            if (this.loading) return;
             this.csvDragOver = false;
             if (this.users.length && !this.csvImportUserId) {
                 this.csvImportUserId = this.users[0].telegram_id;
             }
             this.showCsvImport = true;
+            this.focusCsvHeading();
         },
 
         closeCsvImport() {
             if (this.loading) return;
             this.showCsvImport = false;
             this.csvDragOver = false;
+            if (this.csvStep === 'complete') this.resetCsvImport();
+            this.$nextTick(() => this.$refs.csvOpen?.focus());
+        },
+
+        resetCsvImport() {
+            this.csvStep = 'prepare';
+            this.csvFileName = '';
+            this.csvRows = [];
+            this.csvErrors = [];
+            this.csvSkippedIncomeCount = 0;
+            this.csvSkippedInvalidCount = 0;
+        },
+
+        focusCsvHeading() {
+            this.$nextTick(() => {
+                const heading = this.csvStep === 'prepare' ? this.$refs.csvPrepareHeading : this.$refs.csvResultHeading;
+                heading?.focus();
+            });
         },
 
         csvSummaryText() {
-            const parts = [`${this.csvRows.length} expenses ready`];
+            const parts = [`${this.csvEditableRows.length} expenses available`];
             if (this.csvSkippedIncomeCount) parts.push(`${this.csvSkippedIncomeCount} income skipped`);
             if (this.csvSkippedInvalidCount) parts.push(`${this.csvSkippedInvalidCount} invalid skipped`);
             return parts.join(', ');
         },
 
         allCsvRowsSelected() {
-            const eligible = this.csvRows.filter(row => !row.imported);
-            return eligible.length > 0 && eligible.every(row => row.selected);
+            const rows = this.csvEditableRows;
+            return rows.length > 0 && rows.every(row => row.selected);
         },
 
         setAllCsvRows(selected) {
-            this.csvRows.forEach(row => {
-                if (!row.imported) row.selected = selected;
-            });
+            this.csvEditableRows.forEach(row => { row.selected = selected; });
         },
 
-        selectedCsvRowsCount() {
-            return this.csvRows.filter(row => row.selected && !row.imported).length;
+        get csvEditableRows() {
+            return this.csvRows.filter(row => row.status === 'pending' || row.status === 'failed');
         },
 
-        csvRowsNeedingConfirmation() {
-            return this.csvRows.filter(row => row.selected && row.duplicateWarning && !row.allowDuplicate);
+        get csvSelectedRows() {
+            return this.csvEditableRows.filter(row => row.selected);
         },
 
-        readyCsvRows() {
-            return this.csvRows.filter(row =>
-                row.selected && !row.imported && (!row.duplicateWarning || row.allowDuplicate),
-            );
+        get csvDuplicates() {
+            return this.csvRows.filter(row => row.status === 'duplicate');
         },
 
-        clearCsvDuplicateWarning(row) {
-            row.duplicateWarning = null;
-            row.allowDuplicate = false;
+        get csvSelectedDuplicates() {
+            return this.csvDuplicates.filter(row => row.allowDuplicate);
+        },
+
+        get csvResult() {
+            const counts = { imported: 0, duplicate: 0, failed: 0, skipped: 0 };
+            for (const row of this.csvRows) {
+                if (Object.hasOwn(counts, row.status)) counts[row.status]++;
+            }
+            return { ...counts, total: counts.imported + counts.duplicate + counts.failed + counts.skipped };
+        },
+
+        get csvDuplicateImportLabel() {
+            const selected = this.csvSelectedDuplicates.length;
+            if (this.loading) return 'Importing…';
+            if (!selected) return 'Import selected';
+            return `Import ${selected} ${selected === 1 ? 'transaction' : 'transactions'}`;
         },
 
         missingCsvCategoryCount() {
-            return this.readyCsvRows().filter(row => !row.category_name).length;
+            return this.csvSelectedRows.filter(row => !row.category_name).length;
         },
 
         handleCsvDrop(event) {
@@ -892,12 +927,10 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         },
 
         async handleCsvFile(file) {
-            if (!file || this.loading) return;
+            if (!file || this.loading || this.csvStep !== 'prepare') return;
+            this.resetCsvImport();
             this.csvFileName = file.name;
-            this.csvRows = [];
-            this.csvErrors = [];
-            this.csvSkippedIncomeCount = 0;
-            this.csvSkippedInvalidCount = 0;
+            this.loading = true;
 
             try {
                 const text = await file.text();
@@ -950,9 +983,7 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
                     parsedRows.push({
                         id: `${Date.now()}-${idx}`,
                         selected: true,
-                        imported: false,
-                        duplicateWarning: null,
-                        allowDuplicate: false,
+                        status: 'pending',
                         happened_at: happenedAt,
                         amount: Math.abs(amount).toFixed(2),
                         category_name: '',
@@ -967,7 +998,8 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
             } catch (err) {
                 this.csvErrors.push('Could not read this CSV file.');
             } finally {
-                if (this.$refs.csvInput) this.$refs.csvInput.value = '';
+                this.loading = false;
+                if (this.$refs?.csvInput) this.$refs.csvInput.value = '';
             }
         },
 
@@ -986,8 +1018,8 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
         },
 
         async submitCsvImport() {
-            if (this.loading) return;
-            const rows = this.readyCsvRows();
+            if (this.loading || this.csvStep !== 'prepare') return;
+            const rows = this.csvSelectedRows;
             if (!rows.length) {
                 Alpine.store('toast').add('Select at least one expense to import', 'error');
                 return;
@@ -998,45 +1030,71 @@ function transactionsPage(initialData, initialCategories, initialUsers, initialL
                 return;
             }
 
-            this.loading = true;
-            let created = 0;
-            let failed = 0;
-            for (const row of rows) {
-                const payload = {
-                    type: 'expense',
-                    amount: parseAmount(row.amount),
-                    category_name: row.category_name,
-                    created_by_telegram_id: parseInt(this.csvImportUserId),
-                    happened_at: row.happened_at,
-                    note: row.note || '',
-                    check_duplicates: !row.allowDuplicate,
-                };
-                const result = await postTransaction(payload);
-                if (result?.possible_duplicates) {
-                    row.duplicateWarning = result.possible_duplicates;
-                    row.allowDuplicate = false;
-                } else if (result?.ok) {
-                    row.imported = true;
-                    row.selected = false;
-                    this.clearCsvDuplicateWarning(row);
-                    created++;
-                } else {
-                    failed++;
-                }
+            for (const row of this.csvEditableRows) {
+                if (!row.selected && row.status === 'pending') row.status = 'excluded';
             }
-            this.loading = false;
+            await this.saveCsvRows(rows, true);
+            if (this.csvDuplicates.length) {
+                this.csvStep = 'review';
+                this.focusCsvHeading();
+            } else if (!this.csvResult.failed) {
+                this.csvStep = 'complete';
+                this.focusCsvHeading();
+            }
+        },
 
-            if (created && !failed) {
-                Alpine.store('toast').add(`${created} expense(s) imported`, 'success');
-                if (!this.csvRowsNeedingConfirmation().length) {
-                    this.showCsvImport = false;
+        async importSelectedCsvDuplicates() {
+            if (this.loading || this.csvStep !== 'review') return;
+            const rows = this.csvSelectedDuplicates;
+            if (!rows.length) return;
+            await this.saveCsvRows(rows, false);
+            if (!this.csvSelectedDuplicates.length) this.finishCsvDuplicateReview();
+        },
+
+        finishCsvDuplicateReview() {
+            if (this.loading || this.csvStep !== 'review') return;
+            for (const row of this.csvDuplicates) row.status = 'skipped';
+            this.csvStep = 'complete';
+            this.focusCsvHeading();
+        },
+
+        retryCsvFailures() {
+            if (this.loading || this.csvStep !== 'complete' || !this.csvResult.failed) return;
+            this.setAllCsvRows(true);
+            this.csvStep = 'prepare';
+            this.focusCsvHeading();
+        },
+
+        async saveCsvRows(rows, checkDuplicates) {
+            this.loading = true;
+            let saved = false;
+            try {
+                for (const row of rows) {
+                    const result = await postTransaction({
+                        type: 'expense',
+                        amount: parseAmount(row.amount),
+                        category_name: row.category_name,
+                        created_by_telegram_id: parseInt(this.csvImportUserId),
+                        happened_at: row.happened_at,
+                        note: row.note || '',
+                        check_duplicates: checkDuplicates,
+                    });
+                    if (result?.ok) {
+                        row.status = 'imported';
+                        saved = true;
+                    } else if (!checkDuplicates) {
+                        row.reviewFailed = true;
+                    } else if (result?.possible_duplicates) {
+                        row.status = 'duplicate';
+                        row.duplicateWarning = result.possible_duplicates;
+                        row.allowDuplicate = false;
+                    } else {
+                        row.status = 'failed';
+                    }
                 }
-            }
-            if (created && failed) {
-                Alpine.store('toast').add(`${created} imported, ${failed} failed`, 'info');
-            }
-            if (created) {
-                await this.transactionsChanged();
+                if (saved) await this.transactionsChanged();
+            } finally {
+                this.loading = false;
             }
         },
 

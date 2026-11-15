@@ -9,7 +9,7 @@
     <h2>Transactions</h2>
     <div class="page-actions">
         <button @click="openAdd()">+ Add Transaction</button>
-        <button @click="openCsvImport()" class="secondary">Import Expenses CSV</button>
+        <button @click="openCsvImport()" x-ref="csvOpen" class="secondary">Import Expenses CSV</button>
     </div>
 </div>
 
@@ -246,9 +246,16 @@
 </div>
 
 <!-- CSV Import Modal -->
-<div x-show="showCsvImport" x-cloak class="modal-overlay" @click.self="closeCsvImport()">
-    <div class="modal-content modal-wide">
-        <h3>Import Expenses From CSV</h3>
+<div x-show="showCsvImport" x-cloak class="modal-overlay" @click.self="closeCsvImport()"
+     @keydown.escape.stop="closeCsvImport()">
+    <div x-show="csvStep === 'prepare'" class="modal-content modal-wide"
+         role="dialog" aria-modal="true" aria-labelledby="csv-prepare-heading">
+        <h3 id="csv-prepare-heading" x-ref="csvPrepareHeading" tabindex="-1">Import Expenses From CSV</h3>
+
+        <div class="import-errors" role="status" x-show="!loading && csvResult.failed">
+            <span x-text="`Imported ${csvResult.imported} of ${csvResult.total} transactions.`"></span>
+            <span x-text="`${csvResult.failed} could not be imported. Review the rows below and try again.`"></span>
+        </div>
 
         <div class="grid-2">
             <div class="form-row">
@@ -287,17 +294,14 @@
             <div x-text="missingCsvCategoryCount() + ' selected row(s) need an expense category before import.'"></div>
         </div>
 
-        <template x-if="csvRows.length">
+        <template x-if="csvEditableRows.length">
             <div>
                 <div class="import-toolbar">
                     <label class="inline-check">
                         <input type="checkbox" :checked="allCsvRowsSelected()" :disabled="loading" @change="setAllCsvRows($event.target.checked)">
                         Select all
                     </label>
-                    <span x-text="selectedCsvRowsCount() + ' selected'"></span>
-                    <span x-show="csvRowsNeedingConfirmation().length"
-                          x-text="csvRowsNeedingConfirmation().length + ' need duplicate review'"></span>
-                    <span x-show="csvSkippedIncomeCount" x-text="csvSkippedIncomeCount + ' income rows skipped'"></span>
+                    <span x-text="csvSelectedRows.length + ' selected'"></span>
                 </div>
 
                 <div class="table-scroll">
@@ -319,41 +323,27 @@
                             </tr>
                         </thead>
                         <tbody>
-                            <template x-for="row in csvRows" :key="row.id">
+                            <template x-for="row in csvEditableRows" :key="row.id">
                                 <tr :class="{ 'row-muted': !row.selected, 'row-error': row.selected && !row.category_name }">
                                     <td data-label="Use">
-                                        <input type="checkbox" x-model="row.selected" :disabled="loading || row.imported">
+                                        <input type="checkbox" x-model="row.selected" :disabled="loading">
                                     </td>
                                     <td data-label="Date">
-                                        <input type="datetime-local" x-model="row.happened_at" :disabled="loading || row.imported"
-                                               @input="clearCsvDuplicateWarning(row)">
+                                        <input type="datetime-local" x-model="row.happened_at" :disabled="loading">
                                     </td>
                                     <td data-label="Amount" class="text-right">
-                                        <input type="text" inputmode="decimal" x-model="row.amount" :disabled="loading || row.imported"
-                                               @input="clearCsvDuplicateWarning(row)">
+                                        <input type="text" inputmode="decimal" x-model="row.amount" :disabled="loading">
                                     </td>
                                     <td data-label="Category">
-                                        <select x-model="row.category_name" :disabled="loading || row.imported">
+                                        <select x-model="row.category_name" :disabled="loading">
                                             <option value="">Select...</option>
                                             <template x-for="c in expenseCategories()" :key="c.id">
                                                 <option :value="c.name" x-text="c.name"></option>
                                             </template>
                                         </select>
                                     </td>
-                                    <td data-label="Note" class="import-note-cell">
-                                        <div>
-                                            <input type="text" x-model="row.note" :disabled="loading || row.imported">
-                                            <template x-if="row.duplicateWarning">
-                                                <div class="duplicate-warning" role="alert">
-                                                    <strong x-text="duplicateWarningTitle(row.duplicateWarning)"></strong>
-                                                    <div x-text="duplicateWarningDetails(row.duplicateWarning)"></div>
-                                                    <label class="inline-check">
-                                                        <input type="checkbox" x-model="row.allowDuplicate" :disabled="loading || !row.selected">
-                                                        Import anyway
-                                                    </label>
-                                                </div>
-                                            </template>
-                                        </div>
+                                    <td data-label="Note">
+                                        <input type="text" x-model="row.note" :disabled="loading">
                                     </td>
                                 </tr>
                             </template>
@@ -365,9 +355,93 @@
 
         <div class="form-actions">
             <button @click="closeCsvImport()" :disabled="loading" class="secondary">Cancel</button>
-            <button @click="submitCsvImport()" :disabled="loading || !readyCsvRows().length"
-                    x-text="loading ? 'Importing...' : 'Submit Import'"></button>
+            <button @click="submitCsvImport()" :disabled="loading || !csvSelectedRows.length"
+                    x-text="loading ? 'Please wait…' : 'Submit Import'"></button>
         </div>
+    </div>
+
+    <div x-show="csvStep !== 'prepare'" class="modal-content csv-review-dialog"
+         role="dialog" aria-modal="true" aria-labelledby="csv-result-heading">
+        <div class="csv-review-content">
+            <header class="csv-review-header">
+                <h3 id="csv-result-heading" x-ref="csvResultHeading" tabindex="-1"
+                    x-text="csvStep === 'review' ? 'Review possible duplicates' : (csvResult.failed ? 'Import finished with errors' : 'CSV import complete')"></h3>
+                <p x-text="csvFileName"></p>
+            </header>
+            <div class="csv-result" :class="{ 'csv-result-saved': csvResult.imported > 0 }" role="status">
+                <strong x-text="`Imported ${csvResult.imported} of ${csvResult.total} transactions`"></strong>
+                <span x-show="csvResult.duplicate" class="csv-result-review"
+                      x-text="csvResult.duplicate === 1 ? '1 possible duplicate needs review.' : `${csvResult.duplicate} possible duplicates need review.`"></span>
+                <span x-show="csvResult.skipped"
+                      x-text="`Skipped ${csvResult.skipped} possible ${csvResult.skipped === 1 ? 'duplicate' : 'duplicates'}.`"></span>
+                <span x-show="csvResult.failed" class="csv-result-error"
+                      x-text="`${csvResult.failed} could not be imported.`"></span>
+            </div>
+        </div>
+
+        <div x-show="csvStep === 'review'" class="csv-review-list">
+            <table class="responsive-table csv-review-table">
+                <thead>
+                    <tr>
+                        <th scope="col">From CSV</th>
+                        <th scope="col">Matching transactions</th>
+                        <th scope="col">Import anyway</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template x-for="row in csvDuplicates" :key="row.id">
+                        <tr :class="{ 'csv-review-selected': row.allowDuplicate }">
+                            <td data-label="From CSV">
+                                <div>
+                                    <strong x-text="row.note || 'Expense'"></strong>
+                                    <div class="csv-review-meta" x-text="csvTransactionDetails(row, row.category_name)"></div>
+                                </div>
+                            </td>
+                            <td data-label="Matching transactions">
+                                <div class="csv-matches">
+                                    <template x-for="match in row.duplicateWarning.matches" :key="match.id">
+                                        <div>
+                                            <strong x-text="match.note || 'Expense'"></strong>
+                                            <div class="csv-review-meta" x-text="csvTransactionDetails(match, match.category)"></div>
+                                        </div>
+                                    </template>
+                                    <div class="csv-review-meta" x-show="row.duplicateWarning.count > row.duplicateWarning.matches.length"
+                                         x-text="`+ ${row.duplicateWarning.count - row.duplicateWarning.matches.length} more`"></div>
+                                </div>
+                            </td>
+                            <td class="csv-review-choice">
+                                <label class="inline-check">
+                                    <input type="checkbox" x-model="row.allowDuplicate" :disabled="loading"
+                                           :aria-label="`Import ${row.note || 'expense'} anyway · ${csvTransactionDetails(row, row.category_name)}`">
+                                    <span>Import anyway</span>
+                                </label>
+                                <div x-show="row.reviewFailed" class="csv-result-error" role="alert">Import failed</div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+        </div>
+
+        <footer x-show="csvStep === 'review'" class="csv-review-footer">
+            <div class="csv-review-selection" aria-live="polite">
+                <strong x-text="`${csvSelectedDuplicates.length} selected for import`"></strong>
+                <span class="csv-review-meta" x-show="csvDuplicates.length > csvSelectedDuplicates.length"
+                      x-text="`${csvDuplicates.length - csvSelectedDuplicates.length} unchecked will be skipped`"></span>
+            </div>
+            <div class="csv-review-actions">
+                <button type="button" class="secondary" @click="finishCsvDuplicateReview()" :disabled="loading"
+                        x-text="`Skip all ${csvDuplicates.length}`"></button>
+                <button type="button" @click="importSelectedCsvDuplicates()" :disabled="loading || !csvSelectedDuplicates.length"
+                        x-text="csvDuplicateImportLabel"></button>
+            </div>
+        </footer>
+        <footer x-show="csvStep === 'complete'" class="csv-review-footer csv-complete-footer">
+            <div class="csv-review-actions">
+                <button type="button" class="secondary" x-show="csvResult.failed" @click="retryCsvFailures()">Retry failed rows</button>
+                <button type="button" @click="closeCsvImport()">Done</button>
+            </div>
+        </footer>
     </div>
 </div>
 
